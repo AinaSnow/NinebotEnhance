@@ -63,7 +63,7 @@ def main():
         with open(summary, 'a', encoding='utf-8') as output:
             output.write(f'## Ninebot Enhance {version}\n\n- Commit: `{commit}`\n- Host assertions: {info["host_assertions"]}\n')
             output.write('- CI APK uses a temporary test certificate and cannot update an official installation.\n' if args.kind == 'ci'
-                         else '- APK certificate matches the pinned release certificate. Publication only occurs when `publish` is selected.\n')
+                         else '- APK certificate matches the pinned release certificate. New versions are published automatically from main.\n')
 
 if __name__ == '__main__':
     main()

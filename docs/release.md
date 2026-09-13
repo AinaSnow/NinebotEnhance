@@ -32,23 +32,23 @@ PowerShell 使用 `$env:JAVA_HOME`、`$env:ANDROID_HOME` 和 `gradlew.bat`。Gra
 
 仓库：[Margele/NinebotEnhance](https://github.com/Margele/NinebotEnhance)，初始可见性为 **Private**。
 
-### CI
+### 自动构建与发布
 
-每次 push、PR 更新和手动运行 `CI` 都会构建，不设置文档路径过滤，也不自动取消较早的 CI。工作流安装 JDK 21、SDK 36.1 和 Build Tools 37.0.0，运行发布构建脚本及 Java 主机断言，再验证 Gradle Debug 构建。构建成功后，在该次 Actions 运行的 Artifacts 中下载 APK、`BUILD-INFO.json` 和 `SHA256SUMS.txt`，保留 7 天。
+仅保留 `Build and Release`（`build-release.yml`）一个工作流。每次分支 push、PR 更新和手动运行都会构建，不设置文档路径过滤。工作流安装 JDK 21、SDK 36.1 和 Build Tools 37.0.0，运行发布脚本测试、APK 构建及 Java 主机断言，再验证 Gradle Debug 构建。
 
-CI 在 runner 临时目录生成测试签名，不读取发布密钥；CI APK 文件名带 `-ci`，不能覆盖原正式签名的安装。自动 CI 不创建标签或 GitHub Release。
+`main` 的 push 或手动运行使用固定发布签名，构建成功后自动创建新版本的标签和 GitHub Release，上传 APK、源码 ZIP、`BUILD-INFO.json` 和 `SHA256SUMS.txt`。Artifacts 同时保留 30 天。版本名称包含 `-` 时标记为预发布版本，例如 `1.1.0-beta.1`。
 
-### 手动 Release
+其他分支和 PR 使用临时测试签名，只构建并上传保留 7 天的 CI 附件；文件名带 `-ci`，不能覆盖正式签名的安装。
 
-1. 在 `main` 更新 `version.properties` 和 `Protocol.java` 中的版本；后续正式发布须使用尚未发布的版本名称，并递增版本代码。
-2. 打开仓库 **Actions → Release → Run workflow**，分支选择 `main`。
-3. 仅验证构建时，不勾选“发布 GitHub Release”。需要发布时勾选该项；按需选择预发布标记。
-4. 工作流使用原发布密钥构建、运行主机断言、验证签名指纹，并生成 APK、当前提交的源码 ZIP、构建信息和校验值。
-5. 勾选发布时，构建成功后才创建对应 `v版本号` 标签和 Release，并上传文件。未勾选时只提供 Actions 构建附件，保留 30 天。
+### 发布新版
 
-`release.yml` 的唯一触发器是 `workflow_dispatch`，推送分支、推送标签和 CI 完成都不会自动发布。Release 仅接受 `main`；重复版本会明确失败，不移动已存在的标签。版本与源码取自触发运行时的提交，而非运行期间更新后的分支。
+1. 更新 `version.properties` 和 `Protocol.java` 中的版本名称，并递增版本代码。
+2. 将修改推送或合并到 `main`，等待 `Build and Release` 完成。
+3. 从仓库 Releases 页面下载新版本。也可以在 **Actions → Build and Release → Run workflow** 中选择 `main` 主动运行，无需再勾选发布选项。
 
-签名材料存于仅允许 `main` 的 GitHub `release` 环境，包含 `RELEASE_KEYSTORE_BASE64` 和 `RELEASE_KEYSTORE_PASSWORD` 两个加密 Secrets。密钥只在手动 Release 的临时目录还原，构建后清理，不进入仓库、缓存或构建附件。普通 CI 使用只读仓库权限；发布 job 才申请写入 Release 所需的权限。所有外部 Actions 固定到完整提交 SHA。
+同版本已存在完整 Release 时，本次仍执行构建，但跳过重复发布，保留原标签与附件。只有标签、草稿或附件不完整时会报错，避免悄悄替换已发布内容。版本与源码取自触发运行的提交。
+
+签名材料存于仅允许 `main` 的 GitHub `release` 环境，包含 `RELEASE_KEYSTORE_BASE64` 和 `RELEASE_KEYSTORE_PASSWORD` 两个加密 Secrets。密钥只在发布 job 的临时目录还原，构建后清理，不进入仓库、缓存或构建附件。普通 CI 使用只读仓库权限；发布 job 才申请写入 Release 所需的权限。所有外部 Actions 固定到完整提交 SHA。
 
 ## 本地源码归档
 
@@ -58,7 +58,7 @@ CI 在 runner 临时目录生成测试签名，不读取发布密钥；CI APK �
 git archive --format=zip --prefix=NinebotEnhance/ --output=dist/NinebotEnhance-1.0.0-source.zip HEAD
 ```
 
-源码包只包含该提交的项目文件，不包含 Git 历史、构建缓存、本机配置、签名私钥或旧构建产物。确认归档中的版本与 APK 一致，并将源码 ZIP 的 SHA-256 加入 `SHA256SUMS.txt`。保留根目录 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`，打包的项目许可证和第三方声明须与源码版本一致。正式发布时，由手动 Release 工作流为同一提交创建标签并归档。
+源码包只包含该提交的项目文件，不包含 Git 历史、构建缓存、本机配置、签名私钥或旧构建产物。确认归档中的版本与 APK 一致，并将源码 ZIP 的 SHA-256 加入 `SHA256SUMS.txt`。保留根目录 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`，打包的项目许可证和第三方声明须与源码版本一致。正式发布时，由自动发布工作流为同一提交创建标签并归档。
 
 ## 发布文件
 
@@ -70,4 +70,4 @@ git archive --format=zip --prefix=NinebotEnhance/ --output=dist/NinebotEnhance-1
 
 `artifact-checks.json` 用于本地核对构建结果；`build-verification.json` 包含本机工具路径和命令记录，不作为下载附件。第三方声明和许可证随源码及 APK 保留。
 
-日常修改推送到 `main` 或通过 PR 合并，由 CI 产生测试构建；正式标签与 Release 统一通过上述手动工作流创建。
+日常修改推送到 `main` 或通过 PR 合并后自动构建；尚未发布的版本在构建成功后自动生成标签和 Release。

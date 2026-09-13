@@ -1,33 +1,58 @@
-name: Release
+name: Build and Release
 
-# Publishing and tagging are only available through an explicit manual run on main.
 on:
+  push:
+    branches: ['**']
+  pull_request:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: '发布 GitHub Release（不勾选则只构建并验证正式签名）'
-        type: boolean
-        default: false
-        required: true
-      prerelease:
-        description: '标记为预发布版本'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: manual-release
-  cancel-in-progress: false
-
 jobs:
+  build:
+    name: Build and test
+    if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+      - name: Test release automation
+        run: python3 -m unittest discover -s tests/python -v
+      - name: Create temporary CI signing key
+        run: python3 scripts/create_signing_key.py --jdk "$JAVA_HOME" --output-dir "$RUNNER_TEMP/ninebot-ci-signing"
+      - name: Compile, test and verify APK
+        run: >-
+          python3 scripts/build.py --sdk "$ANDROID_HOME" --jdk "$JAVA_HOME"
+          --keystore "$RUNNER_TEMP/ninebot-ci-signing/release.jks"
+          --password-file "$RUNNER_TEMP/ninebot-ci-signing/password.txt"
+          --allow-other-signer
+      - name: Verify Gradle build
+        run: bash gradlew :app:assembleDebug --no-daemon
+      - name: Package CI artifacts
+        run: python3 scripts/package_artifacts.py --kind ci
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NinebotEnhance-ci-${{ github.run_number }}-${{ github.run_attempt }}
+          path: dist/ci/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove temporary signing files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ninebot-ci-signing/release.jks" "$RUNNER_TEMP/ninebot-ci-signing/password.txt" "$RUNNER_TEMP/ninebot-ci-signing/certificate.der"
+
   release:
-    name: Build signed release
-    if: github.ref == 'refs/heads/main'
+    name: Build and publish release
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: release
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -35,6 +60,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-build
+      - name: Test release automation
+        run: python3 -m unittest discover -s tests/python -v
       - name: Restore release signing key
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -58,6 +85,8 @@ jobs:
           python3 scripts/build.py --sdk "$ANDROID_HOME" --jdk "$JAVA_HOME"
           --keystore "$RUNNER_TEMP/ninebot-release-signing/release.jks"
           --password-file "$RUNNER_TEMP/ninebot-release-signing/password.txt"
+      - name: Verify Gradle build
+        run: bash gradlew :app:assembleDebug --no-daemon
       - name: Package APK, source and checksums
         run: python3 scripts/package_artifacts.py --kind release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -67,10 +96,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Publish GitHub Release
-        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ inputs.prerelease }}
         run: python3 scripts/publish_release.py
       - name: Remove release signing files
         if: always()

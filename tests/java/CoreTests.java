@@ -422,6 +422,7 @@ public final class CoreTests {
         check(recovery.state() == AppRecoveryState.HIDDEN, "occupied task stays usable regardless of black or unchanged pixels");
         ProjectionTests.run();
         LogExportTests.run();
+        CalibrationTests.run();
         System.out.println("PASS: " + assertions + " assertions (RGBA/top band, projection consent/size, input/rotation, lease/stop cancellation, settings, hook scope, ownership, service reconnection, statistics and app recovery)");
     }
     private static void themeTests() {

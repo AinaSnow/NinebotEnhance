@@ -404,7 +404,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
         // Show cached fields and diagnostics first. No service, Binder call or capture worker gates this window.
         dialog.show();
         if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(theme.background(activity, theme.surface, 24, false));
-        footer.about.setOnClickListener(v -> AboutDialog.show(activity, card));
+        footer.about.setOnClickListener(v -> AboutDialog.show(activity, card, frames));
         footer.close.setOnClickListener(v -> dialog.dismiss());
         Button save = footer.save; save.setEnabled(false);
         boolean[] loaded = {false};

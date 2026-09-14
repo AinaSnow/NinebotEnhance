@@ -36,7 +36,7 @@ public final class PreviewPicture extends View {
     }
     public void back() { cancelTouch(); if (frames.readyFor(request)) frames.back(request); }
     public void toggleKeyboard() {
-        if (paused || !frames.readyFor(request)) return;
+        if (paused || frames.debugModeEnabled() || !frames.readyFor(request)) return;
         if (keyboard) { hideKeyboard(); return; }
         cancelTouch(); keyboard = true; sawIme = false; connectionGeneration++;
         setFocusableInTouchMode(true); setFocusable(true); requestFocus();
@@ -76,7 +76,7 @@ public final class PreviewPicture extends View {
         final int generation = ++connectionGeneration;
         BaseInputConnection connection = new BaseInputConnection(this, true) {
             private boolean connectionClosed;
-            private boolean valid() { return !connectionClosed && keyboard && !paused && generation == connectionGeneration && frames.readyFor(request); }
+            private boolean valid() { return !connectionClosed && keyboard && !paused && !frames.debugModeEnabled() && generation == connectionGeneration && frames.readyFor(request); }
             private void clearDraft() { Editable e = getEditable(); e.clear(); removeComposingSpans(e); Selection.setSelection(e, 0); }
             private boolean commitDraft() {
                 if (!valid()) return false;
@@ -141,7 +141,7 @@ public final class PreviewPicture extends View {
     @Override public boolean onKeyDown(int code, KeyEvent event) { return editingKey(event) || super.onKeyDown(code, event); }
     @Override public boolean onKeyUp(int code, KeyEvent event) { return editingKey(event) || super.onKeyUp(code, event); }
     @Override public boolean onTouchEvent(MotionEvent original) {
-        if (paused || frames.appRecoveryFor(request) != AppRecoveryState.HIDDEN || !frames.readyFor(request) || getWidth() < 1 || getHeight() < 1) {
+        if (paused || frames.debugModeEnabled() || frames.appRecoveryFor(request) != AppRecoveryState.HIDDEN || !frames.readyFor(request) || getWidth() < 1 || getHeight() < 1) {
             cancelTouch(); return true;
         }
         DisplaySettings settings = frames.displaySettings();

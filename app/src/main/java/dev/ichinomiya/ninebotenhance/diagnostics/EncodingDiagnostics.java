@@ -129,6 +129,19 @@ public final class EncodingDiagnostics {
         }
         return text.toString();
     }
+    /** Copy active codec dimensions for a calibration chart; never guess from capture view size. */
+    public synchronized int[] frameSize() {
+        if (active() == null) return null;
+        for (Codec codec : current.codecs) {
+            if (codec.retired) continue;
+            for (EncodingFormat format : new EncodingFormat[]{codec.output, codec.requested}) {
+                if (format != null && format.width() != null && format.height() != null
+                        && format.width() >= 32 && format.height() >= 32 && format.width() <= 4096 && format.height() <= 2160)
+                    return new int[]{format.width().intValue(), format.height().intValue()};
+            }
+        }
+        return null;
+    }
     public synchronized String summary() {
         if(current==null)return "尚未开始投屏";
         if(!current.vehicle)return "本地模拟，没有车辆编码会话";

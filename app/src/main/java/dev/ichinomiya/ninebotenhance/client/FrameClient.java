@@ -4,6 +4,8 @@ import dev.ichinomiya.ninebotenhance.core.AppRecoveryState;
 import dev.ichinomiya.ninebotenhance.core.DirectSession;
 import dev.ichinomiya.ninebotenhance.core.DisplaySettings;
 import dev.ichinomiya.ninebotenhance.core.FramePacer;
+import dev.ichinomiya.ninebotenhance.core.DebugMode;
+import dev.ichinomiya.ninebotenhance.core.CalibrationPattern;
 import dev.ichinomiya.ninebotenhance.core.CaptureSize;
 import dev.ichinomiya.ninebotenhance.core.PrivilegeMode;
 import dev.ichinomiya.ninebotenhance.core.Geometry;
@@ -50,7 +52,10 @@ public final class FrameClient {
     private final Object frameLock = new Object();
     private final ArrayDeque<String> reports = new ArrayDeque<>();
     private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
-    private final Set<Bitmap> supplied = Collections.newSetFromMap(new WeakHashMap<>());
+    private final Map<Bitmap, Integer> supplied = new WeakHashMap<>();
+    private final DebugMode debugMode = new DebugMode();
+    private int pictureRevision;
+    private volatile Bitmap calibration;
     private final String process;
     private Context context;
     private volatile String beginAccepted;
@@ -97,6 +102,10 @@ public final class FrameClient {
                 savedApp = p.getString(AppCatalog.SELECTED, "");
                 savedPrivilege = PrivilegeMode.parse(p.getString("privilege_mode", "AUTO"));
             } catch (RuntimeException e) { report("SETTINGS cache " + Ipc.error(e)); }
+            try {
+                SharedPreferences debug = debugPreferences();
+                debugMode.restore(debug.getBoolean("unlocked", false), debug.getBoolean("enabled", false));
+            } catch (RuntimeException e) { report("DEBUG settings " + Ipc.error(e)); }
             bridge.attach(context); worker.post(poll); controlWorker.post(stopRetry);
         });
     }
@@ -230,7 +239,7 @@ public final class FrameClient {
     public void drawInline(String request, Canvas canvas, int width, int height, boolean rotated) {
         canvas.drawColor(Color.BLACK);
         // Published frames are never mutated/recycled; the UI must not wait for encoder scaling under frameLock.
-        Bitmap snapshot = request.equals(ownerRequest) && ready() ? latest : null;
+        Bitmap snapshot = request.equals(ownerRequest) && ready() ? (debugMode.enabled() ? calibration : latest) : null;
         if (snapshot == null || width < 1 || height < 1) return;
         int save = canvas.save();
         if (rotated) { canvas.translate(width, 0); canvas.rotate(90); int swap = width; width = height; height = swap; }
@@ -242,7 +251,7 @@ public final class FrameClient {
     public void back(String request) { control(request, Protocol.UI_BACK, null); }
     public boolean screenCapture() { return screenCapture; }
     public int appRecoveryFor(String request) {
-        return captureActiveFor(request) && displayReady ? appRecovery : AppRecoveryState.HIDDEN;
+        return !debugMode.enabled() && captureActiveFor(request) && displayReady ? appRecovery : AppRecoveryState.HIDDEN;
     }
     public String appRecoveryDetail() { return appRecoveryDetail; }
     public void restartApp(String request) {
@@ -292,7 +301,7 @@ public final class FrameClient {
         framePacer.reset();
         if (reader != null) { reader.setOnImageAvailableListener(null, null); reader.close(); reader = null; }
         packed = null;
-        synchronized (frameLock) { latest = null; lastImage = 0; supplied.clear(); }
+        synchronized (frameLock) { latest = null; calibration = null; lastImage = 0; supplied.clear(); }
         View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation();
     }
     private final Runnable poll = new Runnable() {
@@ -304,6 +313,7 @@ public final class FrameClient {
                     observeBroker(status);
                     String request = ownerRequest;
                     if (request != null && request.equals(beginAccepted)) acceptStatus(request, status);
+                    refreshCalibration();
                     for (int i = 0; i < 8; i++) {
                         String message; synchronized (reports) { message = reports.pollFirst(); } if (message == null) break;
                         sendReport(process + " " + message);
@@ -379,7 +389,7 @@ public final class FrameClient {
     public boolean readyFor(String request) { synchronized (frameLock) { return request.equals(ownerRequest) && ready(); } }
     public boolean captureActiveFor(String request) { return request.equals(ownerRequest) && active && SystemClock.elapsedRealtime() - lastPoll < 4000; }
     public boolean failedFor(String request) { return request.equals(ownerRequest) && !active && lastPoll != 0; }
-    private boolean ready() { return active && displayReady && latest != null && SystemClock.elapsedRealtime() - lastPoll < 4000; }
+    private boolean ready() { return active && displayReady && (debugMode.enabled() || latest != null) && SystemClock.elapsedRealtime() - lastPoll < 4000; }
     public void stopDirect(String request) {
         synchronized (observationLock) {
             if (request != null && request.equals(observedRequest)) {
@@ -407,9 +417,12 @@ public final class FrameClient {
     public boolean draw(Canvas canvas, int width, int height) {
         synchronized (frameLock) {
             if (mode != DirectSession.Mode.VEHICLE || !ready() || width < 1 || height < 1 || (long)width * height > 4096L * 2160) return false;
-            float[] r = Geometry.fit(latest.getWidth(), latest.getHeight(), width, height); int saved = canvas.save();
+            boolean debug = debugMode.enabled();
+            Bitmap picture = debug ? calibrationFrame() : latest;
+            float[] r = debug ? new float[]{0, 0, width, height} : Geometry.fit(picture.getWidth(), picture.getHeight(), width, height);
+            int saved = canvas.save();
             try { canvas.clipRect(0, 0, width, height); canvas.drawColor(Color.BLACK);
-                canvas.drawBitmap(latest, null, new RectF(r[0], r[1], r[2], r[3]), paint);
+                canvas.drawBitmap(picture, null, new RectF(r[0], r[1], r[2], r[3]), paint);
             } finally { canvas.restoreToCount(saved); }
             replacements++; if (streamStats != null) streamStats.replaced(); return true;
         }
@@ -419,18 +432,64 @@ public final class FrameClient {
             if (mode != DirectSession.Mode.VEHICLE || !ready() || width <= 0 || height <= 0 || (long)width * height > 4096L * 2160) return null;
             Bitmap output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888); output.setDensity(density);
             if (!draw(new Canvas(output), width, height)) { output.recycle(); return null; }
-            supplied.add(output); if (early) earlyFrames++;
+            supplied.put(output, pictureRevision); if (early) earlyFrames++;
             return output; // Encoder owns this object; never recycle or overwrite it from the producer.
         }
     }
     public Bitmap replace(Bitmap original) {
         synchronized (frameLock) {
             if (mode != DirectSession.Mode.VEHICLE || original == null || original.isRecycled() || !ready()) return null;
-            if (supplied.contains(original)) { deduplicated++; return original; }
+            if (Integer.valueOf(pictureRevision).equals(supplied.get(original))) { deduplicated++; return original; }
             return replacement(original.getWidth(), original.getHeight(), original.getDensity(), false);
         }
     }
     public DisplaySettings cachedSettings() { return savedSettings; }
+    public boolean debugModeUnlocked() { return debugMode.unlocked(); }
+    public boolean debugModeEnabled() { return debugMode.enabled(); }
+    public boolean debugVersionTap() {
+        boolean wasUnlocked = debugMode.unlocked();
+        boolean unlocked = debugMode.tapVersion();
+        if (unlocked && !wasUnlocked) persistDebug();
+        return unlocked;
+    }
+    public void setDebugMode(boolean enabled) {
+        synchronized (frameLock) {
+            if (!debugMode.setEnabled(enabled)) return;
+            pictureRevision++; calibration = null;
+        }
+        persistDebug(); report("DEBUG calibration enabled=" + debugMode.enabled());
+        worker.post(this::refreshCalibration);
+        View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation();
+    }
+    private SharedPreferences debugPreferences() {
+        return context.getSharedPreferences(Protocol.MODULE + ".debug", Context.MODE_PRIVATE);
+    }
+    private void persistDebug() {
+        try { if (context != null) debugPreferences().edit().putBoolean("unlocked", debugMode.unlocked()).putBoolean("enabled", debugMode.enabled()).apply(); }
+        catch (RuntimeException e) { report("DEBUG settings write " + Ipc.error(e)); }
+    }
+    private void refreshCalibration() {
+        Bitmap previous = calibration;
+        synchronized (frameLock) {
+            if (!active || !displayReady || !debugMode.enabled()) return;
+            calibrationFrame();
+        }
+        if (previous != calibration) { View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation(); }
+    }
+    /** Called under frameLock. The cached chart is immutable and never recycled while a preview may use it. */
+    private Bitmap calibrationFrame() {
+        int[] encoded = encoding.frameSize();
+        int width = encoded == null ? DisplaySettings.defaults().width : encoded[0];
+        int height = encoded == null ? DisplaySettings.defaults().frameHeight() : encoded[1];
+        if (calibration == null || calibration.getWidth() != width || calibration.getHeight() != height) {
+            calibration = Bitmap.createBitmap(CalibrationPattern.render(width, height), width, height, Bitmap.Config.ARGB_8888);
+            calibration.setDensity(Bitmap.DENSITY_NONE);
+            pictureRevision++;
+            report("DEBUG calibration size=" + width + "x" + height + " coordinates=" + (encoded == null ? "fallback" : "codec")
+                    + " origin=top-left minor=10 major=50 cell=100 topBand=bypassed");
+        }
+        return calibration;
+    }
     public PrivilegeMode cachedPrivilege() { return savedPrivilege; }
     public void appIcon(String component, android.widget.ImageView target) { appIcons.load(component, target); }
     private void cacheSettings(DisplaySettings value, String selected) {
@@ -508,6 +567,7 @@ public final class FrameClient {
         return "Ninebot Enhance " + Protocol.VERSION + " / Android " + Build.VERSION.RELEASE + " / " + Build.MANUFACTURER + " " + Build.MODEL
                 + "\n当前连接：\n" + status() + "\nprocess=" + process + " pid=" + android.os.Process.myPid()
                 + " mode=" + mode + " captureSource=" + (screenCapture ? "MediaProjection" : "VirtualDisplay")
+                + " debugMode=" + debugMode.enabled()
                 + " selectedApp=" + savedApp + " pendingStops=" + pendingStops.size() + " metadataBusy=" + metadataBusy.get()
                 + "\n模块进程：" + brokerIdentity + "\n最后模块会话状态：" + brokerStatus
                 + "\nreplaced=" + replacements + " early=" + earlyFrames + " dedup=" + deduplicated

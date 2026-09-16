@@ -4,6 +4,11 @@
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Used by the foreground launch-app picker and the notification allowlist. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <queries>
         <package android:name="cn.ninebot.ninebot" />
         <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
@@ -11,7 +16,15 @@
     <application android:label="Ninebot Enhance" android:description="@string/module_description"
         android:icon="@android:drawable/sym_def_app_icon" android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:allowBackup="false" android:supportsRtl="true" android:usesCleartextTraffic="false">
-        <!-- No launcher. Only an immutable, session-bound PendingIntent can open recording consent. -->
+        <!-- No launcher. Private activities are opened through immutable module PendingIntents. -->
+        <activity android:name=".ui.LaunchAppPickerActivity" android:exported="false"
+            android:excludeFromRecents="true" />
+        <activity android:name=".ui.NotificationSettingsActivity" android:exported="false"
+            android:excludeFromRecents="true" />
+        <service android:name=".notification.MirrorNotificationListener" android:exported="true"
+            android:label="Ninebot Enhance" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+        </service>
         <activity android:name=".ui.ScreenCaptureConsentActivity" android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"
             android:resizeableActivity="true" />

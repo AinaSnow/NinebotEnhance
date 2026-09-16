@@ -32,7 +32,7 @@ public final class LocalVirtualDisplayDialog {
         root.setTag(MirrorUi.PREVIEW_TAG); root.setForceDarkAllowed(false);
         root.setBackgroundColor(theme.surface);
         picture = new PreviewPicture(activity, request, frames);
-        toolbar = new PreviewToolbar(activity, theme, "虚拟屏预览", picture, end, diagnostics);
+        toolbar = new PreviewToolbar(activity, theme, "虚拟屏预览", picture, end, diagnostics, frames::simulateNotification);
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, -2));
         FrameLayout screen = new FrameLayout(activity);
         screen.addView(picture, new FrameLayout.LayoutParams(-1, -1));

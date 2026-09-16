@@ -20,6 +20,23 @@ public final class ServiceBridge {
     private volatile IBinder remote;
     private volatile String state = "等待连接模块服务";
     public ServiceBridge(Consumer<String> log) { this.log = log; }
+    /** MIUI / HyperOS only let another app start our service once autostart (关联启动) is allowed; say so instead of retrying silently. */
+    public static final String AUTOSTART_HINT = "HyperOS / MIUI 需要在“应用管理 → Ninebot Enhance → 自启动”中允许自启动和关联启动，否则九号无法拉起模块服务；授予通知使用权后模块进程由系统保持存活，也可绕过此限制。";
+    private static Boolean hyperOs;
+    public static synchronized boolean hyperOs() {
+        if (hyperOs != null) return hyperOs;
+        boolean detected = false;
+        try {
+            java.lang.reflect.Method get = Class.forName("android.os.SystemProperties").getMethod("get", String.class);
+            for (String key : new String[]{"ro.mi.os.version.name", "ro.miui.ui.version.name", "ro.miui.ui.version.code"}) {
+                Object value = get.invoke(null, key); if (value != null && !value.toString().isEmpty()) { detected = true; break; }
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {}
+        String brand = (Build.BRAND + " " + Build.MANUFACTURER).toLowerCase(java.util.Locale.ROOT);
+        hyperOs = detected || brand.contains("xiaomi") || brand.contains("redmi") || brand.contains("poco");
+        return hyperOs;
+    }
+    private static String refused(String base) { return hyperOs() ? base + "\n" + AUTOSTART_HINT : base; }
     public void attach(Context context) {
         main.post(() -> { if (this.context != null) return; this.context = context; rotate(); main.postDelayed(health, 1000); });
     }
@@ -48,14 +65,15 @@ public final class ServiceBridge {
     private void rotate() {
         Link previous = current;
         Link next = new Link(binding.begin(SystemClock.elapsedRealtime())); current = next; remote = null;
-        state = "正在绑定模块服务（第 " + next.id + " 次）"; log.accept("BRIDGE " + state);
+        int failures = binding.failures();
+        state = failures == 0 ? "正在绑定模块服务（第 " + next.id + " 次）" : refused("模块服务连续 " + failures + " 次未响应绑定，正在重试"); log.accept("BRIDGE " + state);
         try {
             // Acquire a replacement binding before releasing the old one to avoid a needless Service.onDestroy.
             ComponentName target = new ComponentName(Protocol.MODULE, SERVICE_CLASS);
             log.accept("BRIDGE target=" + target.flattenToShortString());
             next.registered = context.bindService(new Intent().setComponent(target),
                     next, Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT);
-            if (!next.registered) { state = "系统未接受服务绑定，将自动重试"; log.accept("BRIDGE bindService=false"); }
+            if (!next.registered) { state = refused("系统未接受服务绑定，将自动重试"); log.accept("BRIDGE bindService=false"); }
         } catch (RuntimeException e) { state = "服务绑定失败：" + Ipc.error(e); log.accept("BRIDGE " + state); }
         if (previous != null) previous.release();
     }

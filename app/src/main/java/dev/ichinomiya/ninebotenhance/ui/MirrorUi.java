@@ -14,8 +14,13 @@ public final class MirrorUi {
     public final boolean dark;
     public final int surface, input, text, secondary, border, accent;
     public MirrorUi(Context context, View reference) {
-        boolean night = (context.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        dark = ThemeMode.dark(night, surface(reference, new int[]{256}), foreground(reference, new int[]{256}));
+        this(ThemeMode.dark(
+                (context.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES,
+                surface(reference, new int[]{256}), foreground(reference, new int[]{256})));
+    }
+    /** Explicit palette for module activities inheriting the caller's appearance. */
+    public MirrorUi(boolean dark) {
+        this.dark = dark;
         surface = dark ? 0xff17191f : 0xfffafbfc; input = dark ? 0xff22252c : 0xffeef1f5;
         text = dark ? 0xfff0f1f4 : 0xff20232a; secondary = dark ? 0xff989da8 : 0xff707886;
         border = dark ? 0xff30343d : 0xffdce1e8; accent = dark ? 0xff92caff : 0xff2474b9;

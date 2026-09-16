@@ -20,6 +20,7 @@ public final class PreviewPicture extends View {
     private boolean touching, keyboard, paused, sawIme;
     private int connectionGeneration;
     private MotionEvent lastTouch;
+    private boolean hudGesture;
     private BaseInputConnection activeConnection;
     private final java.util.Set<Integer> heldKeys = new java.util.HashSet<>();
     public Runnable onControlsChanged = () -> {};
@@ -141,19 +142,27 @@ public final class PreviewPicture extends View {
     @Override public boolean onKeyDown(int code, KeyEvent event) { return editingKey(event) || super.onKeyDown(code, event); }
     @Override public boolean onKeyUp(int code, KeyEvent event) { return editingKey(event) || super.onKeyUp(code, event); }
     @Override public boolean onTouchEvent(MotionEvent original) {
-        if (paused || frames.debugModeEnabled() || frames.appRecoveryFor(request) != AppRecoveryState.HIDDEN || !frames.readyFor(request) || getWidth() < 1 || getHeight() < 1) {
+        if (paused || frames.debugModeEnabled() || !frames.readyFor(request) || getWidth() < 1 || getHeight() < 1) {
             cancelTouch(); return true;
         }
         DisplaySettings settings = frames.displaySettings();
-        PreviewTransform transform = new PreviewTransform(settings.width, settings.height, getWidth(), getHeight(), rotated(), settings.topInset);
+        PreviewTransform transform = new PreviewTransform(settings,getWidth(),getHeight(),rotated());
+        float[] m=transform.frameInput;float x=m[0]*original.getX()+m[1]*original.getY()+m[2],y=m[3]*original.getX()+m[4]*original.getY()+m[5];
+        if(original.getActionMasked()==MotionEvent.ACTION_DOWN){cancelTouch();if(transform.fit.contains(original.getX(),original.getY()))hudGesture=frames.hudTouch(request,x,y)!=null;}
+        if(hudGesture){
+            if(original.getPointerCount()>1||original.getActionMasked()==MotionEvent.ACTION_CANCEL){cancelTouch();return true;}
+            if(original.getActionMasked()==MotionEvent.ACTION_UP)cancelTouch();
+            else getParent().requestDisallowInterceptTouchEvent(true);return true;
+        }
+        if(frames.appRecoveryFor(request)!=AppRecoveryState.HIDDEN){cancelTouch();return true;}
         if (original.getActionMasked() == MotionEvent.ACTION_DOWN) {
             cancelTouch(); touching = transform.contains(original.getX(), original.getY());
             if (touching) getParent().requestDisallowInterceptTouchEvent(true);
         }
         if (!touching) return true;
         if (original.getActionMasked() == MotionEvent.ACTION_CANCEL) { cancelTouch(); return true; }
-        // Cancel the entire gesture if any finger enters the band; never inject negative app coordinates.
-        if (settings.topInset > 0) for (int i = 0; i < original.getPointerCount(); i++) {
+        // Background and reserved right column must never inject touches into the app.
+        for (int i = 0; i < original.getPointerCount(); i++) {
             if (!transform.contains(original.getX(i), original.getY(i))) { cancelTouch(); return true; }
             for (int h = 0; h < original.getHistorySize(); h++) {
                 if (!transform.contains(original.getHistoricalX(i, h), original.getHistoricalY(i, h))) { cancelTouch(); return true; }
@@ -167,6 +176,7 @@ public final class PreviewPicture extends View {
         return true;
     }
     public void cancelTouch() {
+        hudGesture=false;
         if (touching && lastTouch != null) {
             MotionEvent cancel = MotionEvent.obtain(lastTouch); cancel.setAction(MotionEvent.ACTION_CANCEL); frames.input(request, cancel);
         }

@@ -55,11 +55,15 @@ final class ProjectionTests {
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         Document manifest = factory.newDocumentBuilder().parse(new File("app/src/main/AndroidManifest.xml"));
         NodeList activities = manifest.getElementsByTagName("activity");
-        Element consent = activities.getLength() == 1 ? (Element) activities.item(0) : null;
+        Element consent = null;
+        for (int i = 0; i < activities.getLength(); i++) {
+            Element item = (Element) activities.item(i);
+            if (".ui.ScreenCaptureConsentActivity".equals(item.getAttribute("android:name"))) consent = item;
+        }
         check(consent != null && ".ui.ScreenCaptureConsentActivity".equals(consent.getAttribute("android:name"))
                 && "false".equals(consent.getAttribute("android:exported")) && "true".equals(consent.getAttribute("android:resizeableActivity"))
                 && consent.getElementsByTagName("intent-filter").getLength() == 0,
-                "only a private resizable consent Activity exists, with no launcher or public filter");
+                "recording consent remains private and resizable, with no launcher or public filter");
         Element service = null; NodeList services = manifest.getElementsByTagName("service");
         for (int i = 0; i < services.getLength(); i++) {
             Element candidate = (Element) services.item(i);

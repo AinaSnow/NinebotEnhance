@@ -93,7 +93,9 @@ public final class RootSession {
         synchronized (this) {
             if (lease.request() != null) throw new IllegalStateException("请先停止投屏再修改设置");
             context.getSharedPreferences("virtual_display", 0).edit().putInt("width", value.width)
-                    .putInt("height", value.height).putInt("dpi", value.dpi).putInt("top_inset", value.topInset).putInt("top_color", value.topColor)
+                    .putInt("height",value.height).putInt("dpi",value.dpi)
+                    .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
+                    .putInt("background_color",value.backgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, app.flattenToString()).apply();
         }
     }

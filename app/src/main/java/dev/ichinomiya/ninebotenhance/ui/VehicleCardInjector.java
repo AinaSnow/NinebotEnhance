@@ -10,11 +10,17 @@ import android.content.ContextWrapper;
 import android.view.*;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import java.util.ArrayDeque;
+import java.util.WeakHashMap;
+import java.util.regex.Pattern;
 
 /** Exact 6.10.10 card structure recovered from layout_detail_navigation_card (res/0oW.xml). */
 public final class VehicleCardInjector {
     private static final String MARKER = "dev.ichinomiya.ninebotenhance.direct-button";
+    /** The ownership-days line at the bottom of the vehicle page; its text is data-driven, so it is matched by content. */
+    private static final Pattern OWNERSHIP = Pattern.compile("拥有爱车");
+    private final WeakHashMap<View, Boolean> ownershipLabels = new WeakHashMap<>();
     private final DirectCastController controller;
     private final FrameClient frames;
     public VehicleCardInjector(DirectCastController controller, FrameClient frames) { this.controller = controller; this.frames = frames; }
@@ -23,6 +29,7 @@ public final class VehicleCardInjector {
         ArrayDeque<View> queue = new ArrayDeque<>(); queue.add(root);
         for (int count = 0; !queue.isEmpty() && count < 1400; count++) {
             View view = queue.removeFirst();
+            if (view instanceof TextView && !(view instanceof Button)) ownershipEntry((TextView)view);
             if (view instanceof ViewGroup && name(view).equals("vMainContainer")) {
                 View cruise = child((ViewGroup)view, "ivCruise");
                 View history = child((ViewGroup)view, "layoutHistory");
@@ -85,6 +92,14 @@ public final class VehicleCardInjector {
             history.setLayoutParams(original);
             frames.report("DIRECT UI insertion failed " + e.getClass().getSimpleName());
         }
+    }
+    /** A second way into the settings: tapping the ownership-days line opens the same dialog as the card button. */
+    private void ownershipEntry(TextView label) {
+        if (ownershipLabels.containsKey(label)) return;
+        CharSequence value = label.getText(); if (value == null || !OWNERSHIP.matcher(value).find()) return;
+        if (label.hasOnClickListeners()) { ownershipLabels.put(label, Boolean.FALSE); frames.report("DIRECT UI ownership label already clickable; left alone"); return; }
+        label.setOnClickListener(v -> { Activity activity = activity(v.getContext()); if (activity != null && !activity.isFinishing()) controller.settings(activity, v); });
+        ownershipLabels.put(label, Boolean.TRUE); frames.report("DIRECT UI ownership label doubles as a settings entry");
     }
     private static void set(Class<?> type, Object value, String name, int number) throws ReflectiveOperationException { type.getField(name).setInt(value, number); }
     public static View child(ViewGroup group, String name) {

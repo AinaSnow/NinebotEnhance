@@ -57,7 +57,30 @@ public final class FrameBridgeService extends Service {
                         PrivilegeManager.prepareStart(FrameBridgeService.this);
                     result = PrivilegeManager.status(FrameBridgeService.this);
                     result.putBoolean("active", session.status().getBoolean("active") || projection.active()); break;
+                case Protocol.NOTIFICATION_SETTINGS:
+                    android.app.ActivityOptions options = android.app.ActivityOptions.makeBasic();
+                    if (Build.VERSION.SDK_INT >= 35) options.setPendingIntentCreatorBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                    Intent settingsIntent = new Intent(FrameBridgeService.this, dev.ichinomiya.ninebotenhance.ui.NotificationSettingsActivity.class).putExtra("dark", args.getBoolean("dark", true));
+                    result.putParcelable("settings_intent", android.app.PendingIntent.getActivity(FrameBridgeService.this, 801, settingsIntent,
+                            android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT, options.toBundle()));
+                    break;
+                case Protocol.LAUNCH_APP_PICKER: {
+                    android.app.ActivityOptions pickerOptions = android.app.ActivityOptions.makeBasic();
+                    if (Build.VERSION.SDK_INT >= 35) pickerOptions.setPendingIntentCreatorBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                    Intent pickerIntent = new Intent(FrameBridgeService.this, dev.ichinomiya.ninebotenhance.ui.LaunchAppPickerActivity.class)
+                            .putExtra("dark", args.getBoolean("dark", true)).putExtra(AppCatalog.SELECTED, args.getString(AppCatalog.SELECTED, ""))
+                            .putExtra(dev.ichinomiya.ninebotenhance.ui.LaunchAppPickerActivity.RESULT, args.getParcelable(dev.ichinomiya.ninebotenhance.ui.LaunchAppPickerActivity.RESULT, ResultReceiver.class));
+                    result.putParcelable("picker_intent", android.app.PendingIntent.getActivity(FrameBridgeService.this, 802, pickerIntent,
+                            android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_CANCEL_CURRENT | android.app.PendingIntent.FLAG_ONE_SHOT, pickerOptions.toBundle()));
+                    break;
+                }
                 case Protocol.READ: result = projectionSource ? projection.status() : session.status(); break;
+                case Protocol.HUD_SNAPSHOT:
+                    result = projectionSource ? projection.status() : session.status();
+                    if (result.getBoolean("active") && args.getString(Protocol.REQUEST, "").equals(result.getString(Protocol.REQUEST)))
+                        result.putBundle("hud", dev.ichinomiya.ninebotenhance.notification.NotificationHub.get(FrameBridgeService.this)
+                                .snapshot(args.getLong("hud_cursor", -1), args.getString("hud_epoch", ""),args.getLong("music_art_revision",-1)));
+                    break;
                 case Protocol.BEGIN:
                     synchronized (session) {
                         Surface surface = args.getParcelable("surface", Surface.class);
@@ -77,6 +100,7 @@ public final class FrameBridgeService extends Service {
                             projectionSource = false; result = session.status();
                         }
                     }
+                    result.putBundle("hud", dev.ichinomiya.ninebotenhance.notification.NotificationHub.get(FrameBridgeService.this).snapshot(-1, ""));
                     break;
                 case Protocol.PROJECTION_SURFACE:
                     Surface updated = args.getParcelable("surface", Surface.class);

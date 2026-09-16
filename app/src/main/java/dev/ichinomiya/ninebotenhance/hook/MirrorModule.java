@@ -28,6 +28,8 @@ public final class MirrorModule extends XposedModule {
     private final AtomicBoolean installed = new AtomicBoolean();
     private StatisticsHooks statistics;
     private EncodingHooks encoding;
+    private TirePressureHooks tirePressure;
+    private VehicleHooks vehicle;
     private final Set<Class<?>> seen = ConcurrentHashMap.newKeySet();
     private final Set<Executable> hooked = ConcurrentHashMap.newKeySet();
     private final Set<Executable> called = ConcurrentHashMap.newKeySet();
@@ -61,7 +63,8 @@ public final class MirrorModule extends XposedModule {
         "cn.ninebot.device.motor.navi.DashNaviDataMessenger$Companion",
         "cn.ninebot.device.motor.navi.CruiseModeActivity",
         "cn.ninebot.device.motor.navi.CruiseModeActivity$Companion",
-        "cn.ninebot.device.motor.navi.ScreenCastHelper"
+        "cn.ninebot.device.motor.navi.ScreenCastHelper",
+        TirePressureHooks.PARSER, TirePressureHooks.MANAGER, VehicleHooks.DEVICE
     };
 
     @Override public void onModuleLoaded(ModuleLoadedParam param) {
@@ -80,6 +83,9 @@ public final class MirrorModule extends XposedModule {
         frames = new FrameClient(process == null ? Protocol.TARGET : process);
         statistics = new StatisticsHooks(this, frames);
         encoding = new EncodingHooks(this, frames);
+        tirePressure = new TirePressureHooks(this, frames, () -> compatibleVersion, this::updateSummary);
+        vehicle = new VehicleHooks(this, frames, () -> compatibleVersion, this::updateSummary);
+        frames.setVehicleReader(vehicle::pulse, vehicle::stop, vehicle::summary);
         encoding.install();
         direct = new DirectCastController(frames, () -> compatibleVersion);
         frames.report("MODULE " + Protocol.VERSION + " loaded API=" + getApiVersion() + "; target=6.10.10; direct cruise entry");
@@ -98,7 +104,7 @@ public final class MirrorModule extends XposedModule {
                         loaders.add(context.getClassLoader());
                         if (chain.getThisObject() != null) loaders.add(chain.getThisObject().getClass().getClassLoader());
                         frames.report("APPLICATION attached after wrapper");
-                        scheduleScan();
+                        scheduleScan(); verifyCatalog(context);
                     }
                 } catch (Throwable e) { frames.report("ATTACH diagnostic failed: " + e.getClass().getSimpleName()); }
                 return result;
@@ -139,6 +145,18 @@ public final class MirrorModule extends XposedModule {
     private void scheduleScan() {
         new Handler(Looper.getMainLooper()).post(this::scan);
     }
+    /** Resolve every catalogued class, method and resource once; the outcome goes to the log, the summary and the settings page. */
+    private void verifyCatalog(Context context) {
+        Thread worker = new Thread(() -> {
+            try {
+                HookCatalog.Report report = HookCatalog.verify(HookCatalog.ALL, name -> {
+                    for (ClassLoader loader : new ArrayList<>(loaders)) try { return Class.forName(name, false, loader); } catch (Throwable ignored) {}
+                    return null;
+                }, target -> context.getResources().getIdentifier(target.member(), target.kind(), Protocol.TARGET));
+                frames.compatibility(report.text()); frames.report("HOOK CHECK " + report.text()); updateSummary();
+            } catch (Throwable e) { frames.report("HOOK CHECK failed " + e.getClass().getSimpleName()); }
+        }, "Ninebot-HookCheck"); worker.setDaemon(true); worker.start();
+    }
     private void scan() {
         if (examining.get()) return;
         examining.set(true);
@@ -158,6 +176,8 @@ public final class MirrorModule extends XposedModule {
     }
     private void inspectUnchecked(Class<?> type) {
         if (!HookPolicy.interestingClass(type.getName()) || seen.size() >= 220 || !seen.add(type)) return;
+        if (TirePressureHooks.interesting(type.getName())) { tirePressure.inspect(type); updateSummary(); return; }
+        if (VehicleHooks.interesting(type.getName())) { vehicle.inspect(type); updateSummary(); return; }
         statistics.inspect(type);
         encoding.inspect(type);
         boolean capture = HookPolicy.captureClass(type.getName());
@@ -185,8 +205,9 @@ public final class MirrorModule extends XposedModule {
         updateSummary();
     }
     private void updateSummary() {
-        frames.summary((compatibleVersion ? "" : "版本未确认或不匹配，替换已禁用\n")
-                + "发现 " + seen.size() + " 类 / 安装 " + hooked.size() + " Hook / 命中 " + called.size());
+        String compatibility = frames.compatibility();
+        frames.summary((compatibleVersion ? "" : "版本未确认或不匹配，替换已禁用\n") + (compatibility.isEmpty() || compatibility.contains("缺失") ? compatibility + (compatibility.isEmpty() ? "" : "\n") : "")
+                + "发现 " + seen.size() + " 类 / 安装 " + (hooked.size()+tirePressure.hookCount()+vehicle.hookCount()) + " Hook / 命中 " + (called.size()+tirePressure.hitCount()+vehicle.hitCount()));
     }
     private void installPowerObserver(Method method) {
         Class<?>[] params = method.getParameterTypes();

@@ -12,6 +12,12 @@ import dev.ichinomiya.ninebotenhance.core.Geometry;
 import dev.ichinomiya.ninebotenhance.core.KeyboardPolicy;
 import dev.ichinomiya.ninebotenhance.core.PendingStops;
 import dev.ichinomiya.ninebotenhance.core.PixelPacking;
+import dev.ichinomiya.ninebotenhance.core.TireTelemetry;
+import dev.ichinomiya.ninebotenhance.core.BatteryTelemetry;
+import dev.ichinomiya.ninebotenhance.core.WidgetSettings;
+import dev.ichinomiya.ninebotenhance.core.WidgetCondition;
+import dev.ichinomiya.ninebotenhance.core.RegisterProbe;
+import dev.ichinomiya.ninebotenhance.core.RideState;
 import dev.ichinomiya.ninebotenhance.diagnostics.Diagnostics;
 import dev.ichinomiya.ninebotenhance.diagnostics.LogDigest;
 import dev.ichinomiya.ninebotenhance.ipc.Ipc;
@@ -40,7 +46,7 @@ import dev.ichinomiya.ninebotenhance.diagnostics.EncodingDiagnostics;
 
 /** Ninebot owns the consumer Surface: compositor -> RGBA -> original encoder. No JPEG IPC. */
 public final class FrameClient {
-    private final Handler main = new Handler(Looper.getMainLooper()), worker, controlWorker, metadataWorker;
+    private final Handler main = new Handler(Looper.getMainLooper()), worker, controlWorker, metadataWorker, hudWorker;
     private final ServiceBridge bridge = new ServiceBridge(this::report);
     private final LogExporter logExporter = new LogExporter(bridge);
     private final AppIconLoader appIcons = new AppIconLoader(bridge);
@@ -52,7 +58,18 @@ public final class FrameClient {
     private final Object frameLock = new Object();
     private final ArrayDeque<String> reports = new ArrayDeque<>();
     private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
-    private final Map<Bitmap, Integer> supplied = new WeakHashMap<>();
+    private record FrameStamp(int picture, long hud) {}
+    private final Map<Bitmap, FrameStamp> supplied = new WeakHashMap<>();
+    private final dev.ichinomiya.ninebotenhance.notification.DashboardHud hud = new dev.ichinomiya.ninebotenhance.notification.DashboardHud();
+    private final TireTelemetry tires = new TireTelemetry();
+    private final BatteryTelemetry battery = new BatteryTelemetry();
+    private volatile java.util.function.BiConsumer<String, WidgetSettings> vehiclePulse = (vehicle, settings) -> {};
+    private volatile Runnable vehicleStop = () -> {};
+    private volatile java.util.function.Supplier<String> vehicleReadSummary = () -> "inactive";
+    private volatile WidgetSettings widgets=WidgetSettings.DEFAULT;
+    private volatile String compatibility="";
+    private final RideState ride=new RideState();
+    private final RegisterProbe probe=new RegisterProbe();private volatile java.util.Set<String> probeSelection=RegisterProbe.all();private volatile java.util.Set<String> probeRawModules=new java.util.LinkedHashSet<>();
     private final DebugMode debugMode = new DebugMode();
     private int pictureRevision;
     private volatile Bitmap calibration;
@@ -91,6 +108,7 @@ public final class FrameClient {
         HandlerThread thread = new HandlerThread("Ninebot-VirtualFrames"); thread.start(); worker = new Handler(thread.getLooper());
         HandlerThread controls = new HandlerThread("Ninebot-VirtualInput"); controls.start(); controlWorker = new Handler(controls.getLooper());
         HandlerThread metadata = new HandlerThread("Ninebot-Metadata"); metadata.start(); metadataWorker = new Handler(metadata.getLooper());
+        HandlerThread overlays = new HandlerThread("Ninebot-PhoneHud"); overlays.start(); hudWorker = new Handler(overlays.getLooper());
     }
     public void attach(Context app) {
         main.post(() -> {
@@ -106,10 +124,53 @@ public final class FrameClient {
                 SharedPreferences debug = debugPreferences();
                 debugMode.restore(debug.getBoolean("unlocked", false), debug.getBoolean("enabled", false));
             } catch (RuntimeException e) { report("DEBUG settings " + Ipc.error(e)); }
-            bridge.attach(context); worker.post(poll); controlWorker.post(stopRetry);
+            try {
+                SharedPreferences saved=context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE);
+                widgets=WidgetSettings.migrate(saved.getInt("version",1),saved.getInt("mask",WidgetSettings.ALL),saved.getInt("tyre_interval",WidgetSettings.DEFAULT_TYRE_SECONDS),saved.getInt("voltage_interval_ms",saved.getInt("voltage_interval",1)*1000),saved.getInt("music_hide",WidgetSettings.DEFAULT_MUSIC_HIDE_SECONDS),saved.getInt("chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),saved.getInt("hold_power",WidgetSettings.DEFAULT_HOLD_POWER),saved.getInt("hold_speed",WidgetSettings.DEFAULT_HOLD_SPEED),saved.getInt("speed_interval_ms",saved.getInt("speed_interval",1)*1000),saved.getInt("power_interval_ms",saved.getInt("power_interval",1)*1000),saved.getInt("hold_power_max",WidgetSettings.DEFAULT_HOLD_POWER_MAX),saved.getInt("hold_seconds",WidgetSettings.DEFAULT_HOLD_SECONDS),saved.getInt("speed_chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),saved.getInt("power_chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),WidgetSettings.parseOrder(saved.getString("widget_order","")),loadConditions(saved));
+                hud.setWidgets(widgets);
+                java.util.Set<String> chosen=saved.getStringSet("probe_registers",null); if(chosen!=null) probeSelection=new java.util.LinkedHashSet<>(chosen);
+                java.util.Set<String> raw=saved.getStringSet("probe_raw_modules",null); if(raw!=null) probeRawModules=new java.util.LinkedHashSet<>(raw);
+            }
+            catch (RuntimeException e) { report("WIDGET settings " + Ipc.error(e)); }
+            bridge.attach(context); worker.post(poll); worker.post(hudPulse); hudWorker.post(hudPoll); controlWorker.post(stopRetry);
         });
     }
     public EncodingDiagnostics encoding() { return encoding; }
+    public TireTelemetry tireData() { return tires; }
+    public BatteryTelemetry batteryData() { return battery; }
+    /** Both observers follow the same selected vehicle; a cast pins it until the session ends. */
+    public void selectVehicle(String key) { tires.select(key); battery.select(key); }
+    /** Installed by the hook layer: pulse while a vehicle session may read, stop resets the read schedule. */
+    public void setVehicleReader(java.util.function.BiConsumer<String, WidgetSettings> pulse, Runnable stop, java.util.function.Supplier<String> summary) { vehiclePulse = pulse; vehicleStop = stop; vehicleReadSummary = summary; }
+    /** Preview helper: one synthetic notification card rendered locally, independent of the phone mailbox. */
+    private int marks;
+    /** Also a timestamp marker for register probing: tap it right after each action on the vehicle and read the MARK lines back in the log. */
+    public void simulateNotification() { hud.simulate(SystemClock.elapsedRealtime()); report("MARK " + (++marks)); View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation(); }
+    public WidgetSettings widgetSettings(){return widgets;}
+    /** Speed and motor power polled by the vehicle hooks; the HUD infers hill hold from them. */
+    public RideState rideData(){return ride;}
+    /** Debug register probe: the value table drawn by the HUD and the registers the vehicle hooks poll. */
+    public RegisterProbe registerProbe(){return probe;}
+    public java.util.Set<String> probeSelection(){return probeSelection;}
+    public void saveProbeSelection(java.util.Set<String> names){if(context==null)return;java.util.Set<String> copy=new java.util.LinkedHashSet<>(names);context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putStringSet("probe_registers",copy).apply();probeSelection=copy;}
+    /** Boards whose full index range the probe reads through injected commands; empty by default. */
+    public java.util.Set<String> probeRawModules(){return probeRawModules;}
+    public void saveProbeRawModules(java.util.Set<String> modules){if(context==null)return;java.util.Set<String> copy=new java.util.LinkedHashSet<>(modules);context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putStringSet("probe_raw_modules",copy).apply();probeRawModules=copy;}
+    /** Outcome of the hook catalog check, filled once the target application is attached. */
+    public String compatibility(){return compatibility;}
+    public void compatibility(String text){compatibility=text==null?"":text;}
+    private static java.util.Map<Integer,WidgetCondition> loadConditions(SharedPreferences saved){
+        java.util.LinkedHashMap<Integer,WidgetCondition> map=new java.util.LinkedHashMap<>();
+        for(int w:WidgetSettings.CONDITIONAL){String text=saved.getString("condition_"+w,null);if(text!=null)map.put(w,WidgetCondition.parse(text));}
+        return map;
+    }
+    public void saveWidgetSettings(WidgetSettings settings){
+        if(context==null)return;
+        SharedPreferences.Editor editor=context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putInt("version",WidgetSettings.PREFERENCE_VERSION).putInt("mask",settings.mask()).putInt("tyre_interval",settings.tyreIntervalSeconds()).putInt("voltage_interval_ms",settings.voltageIntervalMs()).putInt("music_hide",settings.musicHideSeconds()).putInt("chart_seconds",settings.chartSeconds()).putInt("hold_power",settings.holdPowerMin()).putInt("hold_speed",settings.holdSpeedMax()).putInt("speed_interval_ms",settings.speedIntervalMs()).putInt("power_interval_ms",settings.powerIntervalMs()).putInt("hold_power_max",settings.holdPowerMax()).putInt("hold_seconds",settings.holdSeconds()).putInt("speed_chart_seconds",settings.speedChartSeconds()).putInt("power_chart_seconds",settings.powerChartSeconds()).putString("widget_order",settings.encodeOrder());
+        for(int w:WidgetSettings.CONDITIONAL){WidgetCondition c=settings.conditions().get(w);if(c==null)editor.remove("condition_"+w);else editor.putString("condition_"+w,c.encode());}
+        editor.apply();
+        widgets=settings;hud.setWidgets(settings);View preview=inlinePreview.get();if(preview!=null)preview.postInvalidateOnAnimation();
+    }
     public void beginSessionObservations(String request, DirectSession.Mode mode) {
         synchronized (observationLock) {
             if (request.equals(observedRequest)) return;
@@ -124,6 +185,7 @@ public final class FrameClient {
     public void startDirect(String request, DirectSession.Mode mode, Activity activity, Consumer<String> done) {
         beginSessionObservations(request, mode);
         this.mode = mode;
+        tires.beginSession(); battery.beginSession(); hud.reset(request); probe.clear(); ride.clear(); hud.acceptTires(tires.snapshot()); hud.acceptBattery(battery.snapshot());
         ownerRequest = request; active = true; displayReady = false; previewRotated = false; state = "正在连接虚拟屏";
         appRecovery = AppRecoveryState.HIDDEN; appRecoveryDetail = "";
         beginAccepted = null; lastPoll = 0; bridge.ensure();
@@ -151,14 +213,14 @@ public final class FrameClient {
                     if (!screenCapture && selected.isEmpty()) throw new IllegalArgumentException("请先在设置中选择启动应用并保存");
                     if (completed.get() || !request.equals(ownerRequest)) return;
                     settings = value; cacheSettings(value, selected); closeFrames();
-                    int width = settings.width, height = settings.height;
+                    int width = settings.virtualWidth, height = settings.virtualHeight;
                     if (screenCapture) {
                         Rect bounds = activity.getSystemService(android.view.WindowManager.class).getMaximumWindowMetrics().getBounds();
                         CaptureSize capture = CaptureSize.fit(bounds.width(), bounds.height()); width = capture.width(); height = capture.height();
                         state = "正在准备系统录屏授权";
                     }
                     reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
-                    packed = ByteBuffer.allocateDirect(width * (height + (screenCapture ? 0 : settings.topInset)) * 4);
+                    packed = ByteBuffer.allocateDirect((screenCapture ? width * height : settings.width * settings.height) * 4);
                     ImageReader current = reader; current.setOnImageAvailableListener(source -> scheduleImage(request, source), worker);
                     Surface surface = current.getSurface();
                     try { surface.setFrameRate(FramePacer.TARGET_FPS, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT); }
@@ -172,6 +234,7 @@ public final class FrameClient {
                     Bundle status = bridge.call(Protocol.BEGIN, args);
                     if (completed.get() || !request.equals(ownerRequest)) { stopDirect(request); return; }
                     beginAccepted = request; acceptStatus(request, status);
+                    hud.accept(request, status.getBundle("hud"), SystemClock.elapsedRealtime());
                     PendingIntent consent = status.getParcelable(Protocol.CAPTURE_CONSENT, PendingIntent.class);
                     main.post(() -> {
                         if (!completed.compareAndSet(false, true) || !request.equals(ownerRequest)) return;
@@ -214,11 +277,12 @@ public final class FrameClient {
             if (image == null || source != reader || !request.equals(ownerRequest)) return;
             long now = SystemClock.elapsedRealtime();
             Image.Plane plane = image.getPlanes()[0];
-            int width = source.getWidth(), height = source.getHeight(), inset = screenCapture ? 0 : settings.topInset;
-            PixelPacking.rgba(plane.getBuffer(), plane.getRowStride(), plane.getPixelStride(), width, height, packed, inset, settings.topColor);
-            Bitmap bitmap = Bitmap.createBitmap(width, height + inset, Bitmap.Config.ARGB_8888);
+            int width=source.getWidth(),height=source.getHeight();
+            int frameWidth=screenCapture?width:settings.width,frameHeight=screenCapture?height:settings.height;
+            PixelPacking.compose(plane.getBuffer(),plane.getRowStride(),plane.getPixelStride(),width,height,packed,frameWidth,frameHeight,settings.backgroundColor);
+            Bitmap bitmap = Bitmap.createBitmap(frameWidth,frameHeight,Bitmap.Config.ARGB_8888);
             bitmap.copyPixelsFromBuffer(packed); bitmap.setDensity(Bitmap.DENSITY_NONE);
-            if (lastImage == 0) report("RGBA first frame " + width + "x" + (height + inset) + " source=" + (screenCapture ? "MediaProjection" : "VirtualDisplay"));
+            if(lastImage==0)report("RGBA first frame "+frameWidth+"x"+frameHeight+" content="+width+"x"+height+" position=0,"+(frameHeight-height)+" source="+(screenCapture?"MediaProjection":"VirtualDisplay"));
             synchronized (frameLock) { latest = bitmap; lastImage = now; }
             framePacer.captured(now);
             if (samples != null) samples.captured(now);
@@ -245,11 +309,20 @@ public final class FrameClient {
         if (rotated) { canvas.translate(width, 0); canvas.rotate(90); int swap = width; width = height; height = swap; }
         float[] r = Geometry.fit(snapshot.getWidth(), snapshot.getHeight(), width, height);
         canvas.drawBitmap(snapshot, null, new RectF(r[0], r[1], r[2], r[3]), paint);
+        if (!debugMode.enabled()) {
+            int overlaySave = canvas.save(); canvas.translate(r[0], r[1]);
+            hud.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), SystemClock.elapsedRealtime());
+            // The local simulation shows, on top of everything, what the vehicle dashboard itself paints over the frame.
+            DirectSession.Mode current = mode;
+            if (current != null && current != DirectSession.Mode.VEHICLE) dev.ichinomiya.ninebotenhance.notification.DashboardOcclusion.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), hud.hillHold(SystemClock.elapsedRealtime()));
+            canvas.restoreToCount(overlaySave);
+        }
         canvas.restoreToCount(save);
         // A phone repaint is not an encoder capture: do not advance replacement counters.
     }
     public void back(String request) { control(request, Protocol.UI_BACK, null); }
     public boolean screenCapture() { return screenCapture; }
+    public Bundle hudTouch(String request,float x,float y){return readyFor(request)&&!debugMode.enabled()?hud.touch(x,y,settings.width,settings.height,SystemClock.elapsedRealtime()):null;}
     public int appRecoveryFor(String request) {
         return !debugMode.enabled() && captureActiveFor(request) && displayReady ? appRecovery : AppRecoveryState.HIDDEN;
     }
@@ -312,7 +385,10 @@ public final class FrameClient {
                     Bundle status = bridge.call(Protocol.READ, new Bundle());
                     observeBroker(status);
                     String request = ownerRequest;
-                    if (request != null && request.equals(beginAccepted)) acceptStatus(request, status);
+                    if (request != null && request.equals(beginAccepted)) {
+                        acceptStatus(request, status);
+                        if (!active) hud.reset();
+                    }
                     refreshCalibration();
                     for (int i = 0; i < 8; i++) {
                         String message; synchronized (reports) { message = reports.pollFirst(); } if (message == null) break;
@@ -350,6 +426,35 @@ public final class FrameClient {
         if (active && displayReady && screenCapture && reader != null) resizeRecording(request, status);
         if (!active && reader != null) closeFrames();
     }
+    private final Runnable hudPulse = new Runnable() {
+        @Override public void run() {
+            if (active) {
+                hud.acceptTires(tires.snapshot()); hud.acceptBattery(battery.snapshot());
+                WidgetSettings current = widgets;
+                hud.acceptProbe(current.enabled(WidgetSettings.REGISTER_PROBE) ? probe.snapshot(probeSelection, probeRawModules) : null);
+                hud.acceptRide(ride.snapshot());
+                // Local simulation reads too when the vehicle happens to be connected, so reads can be checked without casting.
+                if (mode != null && (current.readsTyres() || current.readsVoltage() || current.readsSpeed() || current.readsPower() || current.enabled(WidgetSettings.REGISTER_PROBE))) vehiclePulse.accept(battery.selectedKey(), current);
+                else vehicleStop.run();
+            } else vehicleStop.run();
+            View preview = inlinePreview.get();
+            if (preview != null && active && !debugMode.enabled()) preview.postInvalidateOnAnimation();
+            worker.postDelayed(this, active ? 50 : 1000);
+        }
+    };
+    private final Runnable hudPoll = new Runnable() {
+        @Override public void run() {
+            String request = ownerRequest;
+            if (request != null && request.equals(beginAccepted) && active && bridge.connected()) {
+                try {
+                    Bundle args = Ipc.request(request); hud.request(args);
+                    Bundle result = bridge.call(Protocol.HUD_SNAPSHOT, args);
+                    hud.accept(request, result.getBundle("hud"), SystemClock.elapsedRealtime());
+                } catch (Exception ignored) { /* Capture and control must remain independent of phone metadata. */ }
+            }
+            hudWorker.postDelayed(this, active ? 200 : 1000);
+        }
+    };
     private void resizeRecording(String request, Bundle status) {
         int width = status.getInt(Protocol.CAPTURE_WIDTH), height = status.getInt(Protocol.CAPTURE_HEIGHT);
         if (reader.getWidth() == width && reader.getHeight() == height) return;
@@ -385,6 +490,8 @@ public final class FrameClient {
     }
     public void summary(String value) { summary = value; }
     public String status() { return bridge.status() + "\n" + state + "\n" + summary; }
+    public boolean serviceConnected() { return bridge.connected(); }
+    public String serviceStatus() { return bridge.status(); }
     public long replacementCount() { synchronized (frameLock) { return replacements; } }
     public boolean readyFor(String request) { synchronized (frameLock) { return request.equals(ownerRequest) && ready(); } }
     public boolean captureActiveFor(String request) { return request.equals(ownerRequest) && active && SystemClock.elapsedRealtime() - lastPoll < 4000; }
@@ -399,7 +506,7 @@ public final class FrameClient {
         }
         if (request == null) return;
         boolean owns = request.equals(ownerRequest);
-        if (owns) { ownerRequest = null; beginAccepted = null; active = displayReady = false; mode = null; }
+        if (owns) { ownerRequest = null; beginAccepted = null; active = displayReady = false; mode = null; tires.endSession(); battery.endSession(); hud.reset(); vehicleStop.run(); }
         pendingStops.add(request); bridge.ensure(); controlWorker.post(this::flushStops);
         worker.post(() -> { if (owns && ownerRequest == null) closeFrames(); });
     }
@@ -423,6 +530,7 @@ public final class FrameClient {
             int saved = canvas.save();
             try { canvas.clipRect(0, 0, width, height); canvas.drawColor(Color.BLACK);
                 canvas.drawBitmap(picture, null, new RectF(r[0], r[1], r[2], r[3]), paint);
+                if(!debug){int overlaySave=canvas.save();canvas.translate(r[0],r[1]);hud.draw(canvas,Math.round(r[2]-r[0]),Math.round(r[3]-r[1]),SystemClock.elapsedRealtime());canvas.restoreToCount(overlaySave);}
             } finally { canvas.restoreToCount(saved); }
             replacements++; if (streamStats != null) streamStats.replaced(); return true;
         }
@@ -432,18 +540,52 @@ public final class FrameClient {
             if (mode != DirectSession.Mode.VEHICLE || !ready() || width <= 0 || height <= 0 || (long)width * height > 4096L * 2160) return null;
             Bitmap output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888); output.setDensity(density);
             if (!draw(new Canvas(output), width, height)) { output.recycle(); return null; }
-            supplied.put(output, pictureRevision); if (early) earlyFrames++;
+            supplied.put(output, stamp()); if (early) earlyFrames++;
             return output; // Encoder owns this object; never recycle or overwrite it from the producer.
         }
     }
     public Bitmap replace(Bitmap original) {
         synchronized (frameLock) {
             if (mode != DirectSession.Mode.VEHICLE || original == null || original.isRecycled() || !ready()) return null;
-            if (Integer.valueOf(pictureRevision).equals(supplied.get(original))) { deduplicated++; return original; }
+            if (stamp().equals(supplied.get(original))) { deduplicated++; return original; }
             return replacement(original.getWidth(), original.getHeight(), original.getDensity(), false);
         }
     }
     public DisplaySettings cachedSettings() { return savedSettings; }
+    private FrameStamp stamp() { return new FrameStamp(pictureRevision, debugMode.enabled() ? 0 : hud.revision(SystemClock.elapsedRealtime())); }
+    public void notificationSettings(Activity activity, boolean dark) {
+        Bundle args = new Bundle(); args.putBoolean("dark", dark);
+        metadataCall(Protocol.NOTIFICATION_SETTINGS, args, result -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            try {
+                PendingIntent intent = result.getParcelable("settings_intent", PendingIntent.class);
+                if (intent == null) throw new IllegalStateException("模块版本不匹配，请更新并重启九号出行");
+                ActivityOptions options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(Build.VERSION.SDK_INT >= 36
+                        ? ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE : ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                activity.startIntentSenderForResult(intent.getIntentSender(), -1, null, 0, 0, 0, options.toBundle());
+            } catch (Exception e) { android.widget.Toast.makeText(activity, "无法打开通知设置：" + Ipc.error(e), 1).show(); }
+        }, error -> { if (!activity.isDestroyed()) android.widget.Toast.makeText(activity, error, 1).show(); });
+    }
+    public void pickLaunchApp(Activity activity, boolean dark, String selected, Consumer<Bundle> chosen) {
+        Bundle args = new Bundle(); args.putBoolean("dark", dark); args.putString(AppCatalog.SELECTED, selected);
+        args.putParcelable(dev.ichinomiya.ninebotenhance.ui.LaunchAppPickerActivity.RESULT, new ResultReceiver(main) {
+            private boolean received;
+            @Override protected void onReceiveResult(int code, Bundle app) {
+                if (received) return; received = true;
+                if (code == Activity.RESULT_OK && app != null && !activity.isFinishing() && !activity.isDestroyed()) chosen.accept(app);
+            }
+        });
+        metadataCall(Protocol.LAUNCH_APP_PICKER, args, result -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            try {
+                PendingIntent intent = result.getParcelable("picker_intent", PendingIntent.class);
+                if (intent == null) throw new IllegalStateException("模块版本不匹配，请更新并重启九号出行");
+                ActivityOptions options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(Build.VERSION.SDK_INT >= 36
+                        ? ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE : ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                activity.startIntentSenderForResult(intent.getIntentSender(), -1, null, 0, 0, 0, options.toBundle());
+            } catch (Exception e) { android.widget.Toast.makeText(activity, "无法打开应用列表：" + Ipc.error(e), 1).show(); }
+        }, error -> { if (!activity.isDestroyed()) android.widget.Toast.makeText(activity, error, 1).show(); });
+    }
     public boolean debugModeUnlocked() { return debugMode.unlocked(); }
     public boolean debugModeEnabled() { return debugMode.enabled(); }
     public boolean debugVersionTap() {
@@ -480,13 +622,13 @@ public final class FrameClient {
     private Bitmap calibrationFrame() {
         int[] encoded = encoding.frameSize();
         int width = encoded == null ? DisplaySettings.defaults().width : encoded[0];
-        int height = encoded == null ? DisplaySettings.defaults().frameHeight() : encoded[1];
+        int height = encoded == null ? DisplaySettings.defaults().height : encoded[1];
         if (calibration == null || calibration.getWidth() != width || calibration.getHeight() != height) {
             calibration = Bitmap.createBitmap(CalibrationPattern.render(width, height), width, height, Bitmap.Config.ARGB_8888);
             calibration.setDensity(Bitmap.DENSITY_NONE);
             pictureRevision++;
             report("DEBUG calibration size=" + width + "x" + height + " coordinates=" + (encoded == null ? "fallback" : "codec")
-                    + " origin=top-left minor=10 major=50 cell=100 topBand=bypassed");
+                    + " origin=top-left minor=10 major=50 cell=100 canvasAndHud=bypassed");
         }
         return calibration;
     }
@@ -496,7 +638,9 @@ public final class FrameClient {
         savedSettings = value; savedApp = selected;
         try {
             if (context != null) context.getSharedPreferences("dev.ichinomiya.ninebotenhance.cached_display", Context.MODE_PRIVATE).edit()
-                    .putInt("width", value.width).putInt("height", value.height).putInt("dpi", value.dpi).putInt("top_inset", value.topInset).putInt("top_color", value.topColor)
+                    .putInt("width",value.width).putInt("height",value.height).putInt("dpi",value.dpi)
+                    .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
+                    .putInt("background_color",value.backgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, selected).apply();
         } catch (RuntimeException e) { report("SETTINGS cache write " + Ipc.error(e)); }
     }
@@ -568,6 +712,10 @@ public final class FrameClient {
                 + "\n当前连接：\n" + status() + "\nprocess=" + process + " pid=" + android.os.Process.myPid()
                 + " mode=" + mode + " captureSource=" + (screenCapture ? "MediaProjection" : "VirtualDisplay")
                 + " debugMode=" + debugMode.enabled()
+                + "\nHUD " + hud.summary(SystemClock.elapsedRealtime())
+                + "\nTIRE " + tires.summary(SystemClock.elapsedRealtime())
+                + "\nBATTERY " + battery.summary(SystemClock.elapsedRealtime())
+                + "\nVEHICLE READ " + vehicleReadSummary.get()
                 + " selectedApp=" + savedApp + " pendingStops=" + pendingStops.size() + " metadataBusy=" + metadataBusy.get()
                 + "\n模块进程：" + brokerIdentity + "\n最后模块会话状态：" + brokerStatus
                 + "\nreplaced=" + replacements + " early=" + earlyFrames + " dedup=" + deduplicated

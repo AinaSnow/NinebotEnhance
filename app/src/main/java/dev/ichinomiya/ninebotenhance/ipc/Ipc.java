@@ -18,7 +18,8 @@ public final class Ipc {
     public static Bundle request(String id) { Bundle data = new Bundle(); data.putString(Protocol.REQUEST, id); return data; }
     public static void settings(Bundle data, DisplaySettings settings) {
         data.putInt("width", settings.width); data.putInt("height", settings.height); data.putInt("dpi", settings.dpi);
-        data.putInt("top_inset", settings.topInset); data.putInt("top_color", settings.topColor);
+        data.putInt("layout_version",DisplaySettings.LAYOUT_VERSION);data.putInt("virtual_width",settings.virtualWidth);
+        data.putInt("virtual_height",settings.virtualHeight);data.putInt("background_color",settings.backgroundColor);
     }
     public static DisplaySettings settings(Bundle data) { return DisplaySettings.read(data::getInt); }
     public static String error(Throwable error) {

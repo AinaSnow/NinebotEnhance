@@ -51,74 +51,49 @@ public final class CoreTests {
                         && "android.permission.INTERACT_ACROSS_USERS_FULL".equals(shizuku.getAttribute("android:permission")),
                 "official provider initializes Sui in the broker process with its protected authority");
     }
-    static void topInsetTests() {
-        check(DisplaySettings.defaults().topInset == 40 && new DisplaySettings(860, 480, 160).topInset == 0,
-                "new defaults reserve 40 rows while explicit unpadded settings keep zero");
-        DisplaySettings padded = new DisplaySettings(860, 480, 160, 40);
-        check(padded.width == 860 && padded.height == 480 && padded.dpi == 160 && padded.frameHeight() == 520,
-                "black band adds output rows without shrinking the app display or changing its DPI");
-        check(DisplaySettings.defaults().frameHeight() == 480, "440 app rows plus 40 default band rows produce 480 output rows");
-        check(new DisplaySettings(860, 480, 160, 479).frameHeight() == 959, "large valid band still preserves every app row");
-        rejects(() -> new DisplaySettings(860, 480, 160, -1), "negative top band rejected");
-        rejects(() -> new DisplaySettings(860, 480, 160, 480), "band height remains bounded below app height");
-        rejects(() -> new DisplaySettings(860, 480, 160, Integer.MAX_VALUE), "oversized top band rejected");
-
-        // Read-only, offset, pixel-strided source: the last row has no trailing padding.
-        byte[] image = {88,88,88,88,
-                1,2,3,4,99,99,99,99,5,6,7,8,99,99,99,99,
-                9,10,11,12,99,99,99,99,13,14,15,16,99,99,99,99,
-                17,18,19,20,99,99,99,99,21,22,23,24};
-        ByteBuffer source = ByteBuffer.wrap(image).asReadOnlyBuffer(); source.position(4);
-        ByteBuffer output = ByteBuffer.allocateDirect(40);
-        byte[] shifted = {0,0,0,(byte)255,0,0,0,(byte)255,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24};
-        for (java.nio.ByteOrder order : new java.nio.ByteOrder[]{java.nio.ByteOrder.BIG_ENDIAN, java.nio.ByteOrder.LITTLE_ENDIAN}) {
-            output.order(order);
-            PixelPacking.rgba(source, 16, 8, 2, 3, output, 1);
-            byte[] actual = new byte[output.remaining()]; output.duplicate().get(actual);
-            check(Arrays.equals(actual, shifted), "opaque black row precedes every unchanged source row, including the last pixel");
-            check(output.position() == 0 && output.limit() == 32 && output.order() == order, "expanded frame stays readable with its byte order intact");
-            check(source.position() == 4 && source.limit() == image.length, "black band does not consume the input buffer");
-        }
-        PixelPacking.rgba(source, 16, 8, 2, 3, output, 2);
-        byte[] large = new byte[output.remaining()]; output.duplicate().get(large);
-        check(Arrays.equals(large, new byte[]{0,0,0,(byte)255,0,0,0,(byte)255,0,0,0,(byte)255,0,0,0,(byte)255,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24}),
-                "increasing band height never discards source rows");
-        PixelPacking.rgba(source, 16, 8, 2, 3, output);
-        byte[] plain = new byte[output.remaining()]; output.duplicate().get(plain);
-        check(Arrays.equals(plain, new byte[]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24}),
-                "disabling the band exposes only the original rows without stale padding");
-        ByteBuffer dense = ByteBuffer.wrap(new byte[]{1,2,3,4,5,6,7,8});
-        ByteBuffer small = ByteBuffer.allocate(12);
-        PixelPacking.rgba(dense, 4, 4, 1, 2, small, 1);
-        check(Arrays.equals(small.array(), new byte[]{0,0,0,(byte)255,1,2,3,4,5,6,7,8}), "contiguous RGBA copy shifts both source rows without cropping");
-        rejects(() -> PixelPacking.rgba(source, 16, 8, 2, 3, ByteBuffer.allocate(24), 1), "destination sized for the old cropped frame is rejected");
-        ByteBuffer truncated = source.duplicate(); truncated.limit(source.limit() - 1);
-        rejects(() -> PixelPacking.rgba(truncated, 16, 8, 2, 3, output, 1), "missing bottom pixel cannot produce a partial padded frame");
-        rejects(() -> PixelPacking.rgba(source, 16, 8, 2, 3, output, -1), "negative packed offset rejected");
-        rejects(() -> PixelPacking.rgba(source, 16, 8, 2, 3, output, Integer.MAX_VALUE), "overflow-sized packed offset is rejected before writing");
-
-        // The displayed point includes the top band before phone rotation/FIT; injection must undo both.
-        for (boolean rotate : new boolean[]{false, true}) for (int[] view : new int[][]{{360,740}, {360,320}, {1200,540}}) {
-            PreviewTransform mapping = new PreviewTransform(860, 480, view[0], view[1], rotate, 40);
-            for (float[] sourcePoint : new float[][]{{.5f,.5f}, {859.5f,.5f}, {.5f,479.5f}, {859.5f,479.5f}, {430,240}}) {
-                float displayedY = sourcePoint[1] + 40;
-                float x = mapping.fit.left + (rotate ? 520 - displayedY : sourcePoint[0]) / mapping.fit.scale;
-                float y = mapping.fit.top + (rotate ? sourcePoint[0] : displayedY) / mapping.fit.scale;
-                check(mapping.contains(x, y), "all app corners and centre stay touchable below the extra band after FIT and rotation");
-                mapped(mapping.input, x, y, sourcePoint[0], sourcePoint[1]);
+    static void canvasLayoutTests() {
+        DisplaySettings d=DisplaySettings.defaults();
+        check(d.width==848&&d.height==480&&d.virtualWidth==640&&d.virtualHeight==440&&d.contentTop()==40,"calibrated layout reserves the 40px status bar and the right column");
+        check(d.virtualWidth<=644-4,"virtual display leaves four pixels before the overlay at x644");
+        rejects(()->new DisplaySettings(848,480,850,440,160,0xff242424),"oversize app width cannot be cropped");
+        rejects(()->new DisplaySettings(848,480,640,482,160,0xff242424),"oversize app height cannot be cropped");
+        rejects(()->new DisplaySettings(848,480,641,440,160,0xff242424),"odd virtual width rejected");
+        rejects(()->new DisplaySettings(848,480,640,200,160,0xff242424),"tiny virtual height rejected");
+        for(boolean rotate:new boolean[]{false,true})for(int[] view:new int[][]{{360,740},{360,320},{1200,540}}){
+            PreviewTransform m=new PreviewTransform(d,view[0],view[1],rotate);
+            for(float[] point:new float[][]{{.5f,.5f},{639.5f,.5f},{.5f,439.5f},{639.5f,439.5f},{320,220}}){
+                float frameY=point[1]+40;
+                float x=m.fit.left+(rotate?480-frameY:point[0])/m.fit.scale;
+                float y=m.fit.top+(rotate?point[0]:frameY)/m.fit.scale;
+                check(m.contains(x,y),"every virtual-display corner stays touchable after phone rotation and fit");
+                mapped(m.input,x,y,point[0],point[1]);mapped(m.frameInput,x,y,point[0],frameY);
             }
-            float bandX = mapping.fit.left + (rotate ? 500 : 430) / mapping.fit.scale;
-            float bandY = mapping.fit.top + (rotate ? 430 : 20) / mapping.fit.scale;
-            check(!mapping.contains(bandX, bandY), "top band rejects a touch in either preview orientation");
-            check(!mapping.contains(mapping.fit.left - 1, mapping.fit.top), "outer FIT margin remains noninteractive");
+            for(float[] point:new float[][]{{320,20},{640.5f,200},{800,470}}){
+                float x=m.fit.left+(rotate?480-point[1]:point[0])/m.fit.scale;
+                float y=m.fit.top+(rotate?point[0]:point[1])/m.fit.scale;
+                check(!m.contains(x,y),"top and right background never inject touches into the app");
+            }
+            check(!m.contains(m.fit.left-1,m.fit.top),"phone fit margins remain noninteractive");
         }
-        PreviewTransform largeBand = new PreviewTransform(860, 480, 860, 959, false, 479);
-        check(!largeBand.contains(430, 478.5f) && largeBand.contains(430, 479.5f), "large band starts the complete app exactly at the lower boundary");
-        mapped(largeBand.input, 430, 479.5f, 430, .5f);
-        check(largeBand.contains(430, 958.5f), "bottom app row remains interactive with a large band");
-        mapped(largeBand.input, 430, 958.5f, 430, 479.5f);
-        rejects(() -> new PreviewTransform(860, 480, 360, 740, true, -1), "negative preview offset rejected");
-        rejects(() -> new PreviewTransform(860, Integer.MAX_VALUE, 360, 740, false, 1), "overflow-sized padded preview is rejected");
+        DisplaySettings full=new DisplaySettings(860,480,160);PreviewTransform fit=new PreviewTransform(full,860,480,false);
+        check(fit.contains(.5f,.5f)&&fit.contains(859.5f,479.5f),"full-canvas virtual display has no reserved touch margin");
+        byte[] image={88,88,88,88,1,2,3,4,99,99,99,99,5,6,7,8,99,99,99,99,9,10,11,12,99,99,99,99,13,14,15,16};
+        ByteBuffer source=ByteBuffer.wrap(image).asReadOnlyBuffer();source.position(4);
+        for(java.nio.ByteOrder order:new java.nio.ByteOrder[]{java.nio.ByteOrder.BIG_ENDIAN,java.nio.ByteOrder.LITTLE_ENDIAN}){
+            ByteBuffer out=ByteBuffer.allocateDirect(4*3*4).order(order);
+            PixelPacking.compose(source,16,8,2,2,out,4,3,0xff12a0e3);
+            for(int y=0;y<3;y++)for(int x=0;x<4;x++){
+                int i=(y*4+x)*4;
+                byte[] expected=y==0||x>=2?new byte[]{0x12,(byte)0xa0,(byte)0xe3,(byte)255}:Arrays.copyOfRange(image,4+(y-1)*16+x*8,8+(y-1)*16+x*8);
+                for(int c=0;c<4;c++)check(out.get(i+c)==expected[c],"strided app is copied below top rows with full right background");
+            }
+            check(source.position()==4&&out.position()==0&&out.limit()==48&&out.order()==order,"composing preserves buffer state and both byte orders");
+            ByteBuffer truncated=source.duplicate();truncated.limit(source.limit()-1);
+            rejects(()->PixelPacking.compose(truncated,16,8,2,2,out,4,3,0xff242424),"missing bottom pixel fails before partial output");
+            rejects(()->PixelPacking.compose(source,16,8,2,2,out,1,3,0xff242424),"app wider than canvas rejected");
+            rejects(()->PixelPacking.compose(source,16,8,2,2,out,4,1,0xff242424),"app taller than canvas rejected");
+            rejects(()->PixelPacking.compose(source,16,8,2,2,ByteBuffer.allocate(47),4,3,0xff242424),"short canvas allocation rejected");
+        }
     }
     public static void main(String[] args) throws Exception {
         AuthorizationTests.run();
@@ -128,7 +103,7 @@ public final class CoreTests {
         FramePacerTests.run();
         themeTests();
         componentContractTests();
-        topInsetTests();
+        canvasLayoutTests();
         check(!PrivilegeMode.ROOT.useShizuku(true), "explicit Root keeps its chosen backend");
         check(PrivilegeMode.AUTO.useShizuku(true) && !PrivilegeMode.AUTO.useShizuku(false), "automatic backend prefers authorized Shizuku only");
         check(PrivilegeMode.SHIZUKU.useShizuku(true), "explicit authorized Shizuku selected");
@@ -282,7 +257,7 @@ public final class CoreTests {
         check(lease.end(second) && !lease.attach(first), "cancel before su approval rejects late bootstrap");
         check(!lease.begin(null, first) && !lease.begin(first, "wrong"), "malformed nonce rejected");
         // Resolution allocations and density must be checked before opening a Surface.
-        DisplaySettings defaults = DisplaySettings.defaults(); check(defaults.width == 848 && defaults.height == 440 && defaults.dpi == 160, "default dash layout is 848x440/160 DPI");
+        DisplaySettings defaults=DisplaySettings.defaults();check(defaults.width==848&&defaults.height==480&&defaults.virtualWidth==640&&defaults.virtualHeight==440&&defaults.dpi==160,"default frame 848x480 contains virtual display 640x440 at 160 DPI");
         new DisplaySettings(1920, 1080, 320); new DisplaySettings(480, 800, 160);
         rejects(() -> new DisplaySettings(Integer.MAX_VALUE, 480, 160), "overflow-sized width rejected");
         rejects(() -> new DisplaySettings(1920, 1920, 160), "excessive frame memory rejected");
@@ -329,6 +304,54 @@ public final class CoreTests {
         check(binding.disconnected(replacement, 100000), "live binding death starts a fresh grace period");
         check(!binding.expired(104999), "short disconnect does not immediately tear down the binding");
         check(binding.disconnected(replacement, 104000) && binding.expired(105000), "duplicate death events cannot postpone retry forever");
+        BindingState refused = new BindingState();
+        check(refused.begin(0) == 1 && refused.failures() == 0, "the first bind attempt is not a failure");
+        refused.begin(5000); refused.begin(10000);
+        check(refused.failures() == 2, "binds replaced without ever connecting count as refused attempts");
+        check(refused.connected(3) && refused.failures() == 0, "a live connection clears the refused count");
+        var catalog = java.util.List.of(HookCatalog.method("java.lang.String", "length", new String[0], "t"), HookCatalog.method("java.lang.String", "charAt", new String[]{"int"}, "t"),
+                HookCatalog.method("java.lang.String", "endsWith", new String[]{"*.String"}, "t"), HookCatalog.method("java.lang.String", "getBytes", new String[]{"byte[]"}, "t"),
+                HookCatalog.method("java.lang.String", "nope", null, "t"), HookCatalog.type("java.util.Missing", "t"), HookCatalog.resource("id", "ivCruise", "t"), HookCatalog.resource("layout", "present", "t"));
+        HookCatalog.Report report = HookCatalog.verify(catalog, name -> { try { return Class.forName(name); } catch (ClassNotFoundException e) { return null; } }, t -> t.member().equals("ivCruise") ? 0 : 1);
+        check(report.total() == 8 && report.missing().equals(java.util.List.of("String#getBytes(byte[])", "String#nope(…)", "Missing", "id:ivCruise")), "the catalog reports exactly the missing classes, methods and resources: " + report.missing());
+        check(report.text().startsWith("Hook 目标 4/8 可用，缺失：") && HookCatalog.verify(catalog.subList(0, 3), name -> { try { return Class.forName(name); } catch (ClassNotFoundException e) { return null; } }, t -> 1).text().equals("Hook 目标 3/3 可用"), "the report text counts available targets");
+        check(HookCatalog.ALL.size() >= 20 && HookCatalog.ALL.stream().anyMatch(t -> t.owner().equals(HookCatalog.DEVICE) && t.member().equals("sendCommand")), "the catalog covers the vehicle read path");
+        RegisterProbe probe = new RegisterProbe();
+        java.util.function.Function<String, RegisterProbe.Value> value = name -> probe.snapshot(RegisterProbe.all()).stream().filter(r -> r.name().equals(name)).findFirst().get().value();
+        probe.sent("rWarn", 1000); var rows = probe.snapshot(java.util.List.of("rSpeed", "rWarn"));
+        check(rows.size() == 2 && rows.get(0).name().equals("rWarn") && rows.get(0).value().pending() && rows.get(1).name().equals("rSpeed") && rows.get(1).value() == null, "rows follow the catalogue order and unread registers have no value");
+        check(probe.reply("rWarn", "6400", 100, 1200) && !probe.reply("rWarn", "6400", 100, 2200) && probe.reply("rWarn", "6401", 356, 3200), "a reply reports whether the bytes changed");
+        RegisterProbe.Value warn = value.apply("rWarn");
+        check(!warn.pending() && warn.repliedAt() == 3200 && warn.changedAt() == 3200 && warn.changedWithin(6200, 3000) && !warn.changedWithin(6201, 3000), "reply and change times feed the highlight window");
+        probe.silent("rSpeed", 4000); probe.sent("rWarn", 5000); probe.silent("rWarn", 6000);
+        check(value.apply("rSpeed").silent() && value.apply("rSpeed").hex().isEmpty() && value.apply("rWarn").silent() && !value.apply("rWarn").pending() && value.apply("rWarn").hex().equals("6401"), "unanswered reads are marked silent while keeping any earlier value");
+        probe.sent("rWarn", 7000); probe.settled("rWarn");
+        check(!value.apply("rWarn").pending() && value.apply("rWarn").silent(), "settling only clears the in-flight mark");
+        probe.clear(); check(probe.snapshot(RegisterProbe.all()).stream().allMatch(r -> r.value() == null) && probe.snapshot(RegisterProbe.all()).size() == RegisterProbe.CANDIDATES.length, "clearing forgets every value and the catalogue stays complete");
+        check(RegisterProbe.rawName("dis", 26).equals("xdis_1a") && RegisterProbe.raw("xdis_1a") && !RegisterProbe.raw("rBool") && !RegisterProbe.raw("x_1a"), "raw register names carry the board and hex index");
+        RegisterProbe raw = new RegisterProbe(); raw.reply("xdis_1a", "0100", 1, 1000); raw.reply("rWarn", "6400", 100, 1500); raw.sent("xdis_1b", 1600);
+        var rawRows = raw.snapshot(java.util.List.of("rWarn"), java.util.List.of("dis"));
+        check(rawRows.size() == 3 && rawRows.get(0).name().equals("rWarn") && rawRows.get(1).name().equals("xdis_1a") && rawRows.get(2).name().equals("xdis_1b") && raw.snapshot(java.util.List.of("rWarn")).size() == 1, "raw rows follow the named ones in index order and only when their board is requested");
+        raw.reply("xdis_1a", "0200", 2, 3000);
+        var top = RegisterProbe.prioritized(raw.snapshot(java.util.List.of("rWarn"), java.util.List.of("dis")), 2);
+        check(top.size() == 2 && top.get(0).name().equals("xdis_1a") && top.get(1).name().equals("rWarn") && RegisterProbe.replied(rawRows) == 2 && RegisterProbe.changed(raw.snapshot(java.util.List.of("rWarn"), java.util.List.of("dis")), 5000, 3000) == 1, "an overflowing table keeps the most recently changed rows first");
+        RideState rideState = new RideState();
+        check(!rideState.snapshot().hillHold(1000), "no readings means no hill hold");
+        rideState.speed(0, 1000); rideState.power(168, 1200);
+        check(rideState.snapshot().hillHold(1500) && rideState.snapshot().hillHold(4000) && !rideState.snapshot().hillHold(4300), "standing still with the motor holding counts as hill hold until the readings go stale");
+        rideState.speed(12, 4400); rideState.power(400, 4400);
+        check(!rideState.snapshot().hillHold(4500), "moving at 1.2 km/h is not hill hold");
+        rideState.speed(3, 5000); rideState.power(101, 5000);
+        check(!rideState.snapshot().hillHold(5100) && rideState.snapshot().hillHold(5100, 100, 10) && !rideState.snapshot().hillHold(5100, 101, 10) && new RideState.Snapshot(0, 101, 5000, 5000).hillHold(5100), "0.3 km/h only counts once the speed threshold allows it, and power must exceed the threshold");
+        rideState.clear(); check(!rideState.snapshot().hillHold(5100) && !rideState.snapshot().hasPower(), "clearing forgets the readings");
+        rideState.speed(0, 6000); rideState.power(RideState.signedPower(63000), 6000);
+        check(RideState.signedPower(63000) == -2536 && RideState.signedPower(320) == 320 && RideState.signedPower(65535) == -1 && RideState.signedPower(32767) == 32767 && rideState.snapshot().power() == -2536 && rideState.snapshot().hasPower() && !rideState.snapshot().hillHold(6100), "rPower is a signed 16-bit value: regeneration reads negative, stays a known reading and never counts as hill hold");
+        HillHoldDetector detector = new HillHoldDetector();
+        check(!detector.update(new RideState.Snapshot(0, 168, 1000, 1000), 1000, 100, 300, 0, 3000) && !detector.update(new RideState.Snapshot(0, 168, 3000, 3000), 3500, 100, 300, 0, 3000) && detector.update(new RideState.Snapshot(0, 168, 4000, 4000), 4000, 100, 300, 0, 3000) && detector.active(), "hill hold triggers only after the condition has held for the minimum time");
+        check(detector.update(new RideState.Snapshot(0, 350, 5000, 5000), 5000, 100, 300, 0, 3000) && detector.update(new RideState.Snapshot(0, 168, 5500, 5500), 5500, 100, 300, 0, 3000) && detector.update(new RideState.Snapshot(0, 350, 6000, 6000), 6000, 100, 300, 0, 3000) && detector.update(new RideState.Snapshot(0, 350, 8900, 8900), 8900, 100, 300, 0, 3000) && !detector.update(new RideState.Snapshot(0, 350, 9000, 9000), 9000, 100, 300, 0, 3000) && !detector.active(), "leaving the condition ends hill hold only after the minimum time; returning inside restarts the release timer");
+        check(!detector.update(new RideState.Snapshot(0, 168, 9000, 9000), 9000, 100, 300, 0, 3000) && detector.update(new RideState.Snapshot(0, 168, 12000, 12000), 12000, 100, 300, 0, 3000) && detector.update(null, 15000, 100, 300, 0, 3000) && !detector.update(null, 18000, 100, 300, 0, 3000), "re-entry needs the minimum time again and stale or missing readings count as leaving the condition");
+        check(!new RideState.Snapshot(0, 300, 1000, 1000).hillHold(1000, 100, 299, 0) && new RideState.Snapshot(0, 300, 1000, 1000).hillHold(1000, 100, 300, 0), "the maximum power is inclusive");
+        detector.reset(); check(!detector.active(), "reset clears the active flag");
         check(binding.connected(replacement) && !binding.expired(110000), "framework reconnect during grace restores live binding");
         long newest = binding.begin(120000);
         check(binding.connected(newest), "new replacement can connect");
@@ -423,7 +446,10 @@ public final class CoreTests {
         ProjectionTests.run();
         LogExportTests.run();
         CalibrationTests.run();
-        System.out.println("PASS: " + assertions + " assertions (RGBA/top band, projection consent/size, input/rotation, lease/stop cancellation, settings, hook scope, ownership, service reconnection, statistics and app recovery)");
+        NotificationTests.run();
+        TireTelemetryTests.run();
+        BatteryTelemetryTests.run();
+        System.out.println("PASS: " + assertions + " assertions (RGBA/canvas, projection consent/size, input/rotation, lease/stop cancellation, settings, hook scope, ownership, service reconnection, statistics, app recovery and music)");
     }
     private static void themeTests() {
         check(ThemeMode.dark(true, null, 0xff989da8), "night mode is not overridden by secondary grey text");

@@ -1,12 +1,12 @@
 package dev.ichinomiya.ninebotenhance.ipc;
 
 public final class Protocol {
-    public static final String VERSION = "1.0.0";
-    public static final int VERSION_CODE = 35;
+    public static final String VERSION = "1.0.1";
+    public static final int VERSION_CODE = 36;
     public static final String DISPLAY_NAME = "Ninebot Enhance Display";
     public static final String DAEMON_CLASS = "dev.ichinomiya.ninebotenhance.display.RootDisplayMain";
     public static final String MODULE = "dev.ichinomiya.ninebotenhance", TARGET = "cn.ninebot.ninebot";
-    public static final String DESCRIPTOR = MODULE + ".VirtualDisplay.v5", ROOT_AUTHORITY = MODULE + ".root";
+    public static final String DESCRIPTOR = MODULE + ".VirtualDisplay.v6", ROOT_AUTHORITY = MODULE + ".root";
     public static final String REQUEST = "mirror_request", TAG = "NinebotEnhance";
     public static final int READ = 1, REPORT = 2, STOP_DIRECT = 3, BEGIN = 4, SETTINGS = 5, LOG = 6;
     public static final int UI_BACK = 8, UI_INPUT = 9, UI_RESTART_APP = 10, APP_ICON = 11;
@@ -14,6 +14,9 @@ public final class Protocol {
     public static final int PRIVILEGE = 15;
     public static final int PROJECTION_SURFACE = 16;
     public static final int LOG_EXPORT_BEGIN = 17, LOG_EXPORT_FINISH = 18, LOG_EXPORT_CANCEL = 19;
+    public static final int NOTIFICATION_SETTINGS = 20;
+    public static final int HUD_SNAPSHOT = 21;
+    public static final int LAUNCH_APP_PICKER = 22;
     public static final String SCREEN_CAPTURE = "screen_capture", CAPTURE_WIDTH = "capture_width", CAPTURE_HEIGHT = "capture_height";
     public static final String CAPTURE_REVISION = "capture_revision", CAPTURE_CONSENT = "capture_consent";
     public static final int ROOT_STOP = 30, ROOT_INPUT = 32, ROOT_KEY = 33, ROOT_RESTART_APP = 34;

@@ -1,13 +1,15 @@
 package dev.ichinomiya.ninebotenhance.hook;
 
-/** Restrict interception to observed image capture classes, never transport/crypto/vehicle commands. */
+/** Capture replacement and narrowly scoped read-only observers, never vehicle command mutation. */
 public final class HookPolicy {
     public static boolean captureClass(String name) {
         return name.startsWith("cn.ninebot.capture.") && !name.endsWith(".R") && !name.contains(".R$")
                 && !name.endsWith("BuildConfig");
     }
     public static boolean interestingClass(String name) {
-        return captureClass(name) || name.equals("cn.ninebot.mapcapture.DeviceScreenCastManager")
+        return captureClass(name) || name.equals("cn.ninebot.device.motor.thirdparts.TirePressureStateParser")
+                || name.equals("cn.ninebot.device.DeviceManager") || name.equals("cn.ninebot.library.bluetooth.dynamic.DynamicDevice")
+                || name.equals("cn.ninebot.mapcapture.DeviceScreenCastManager")
                 || name.startsWith("cn.ninebot.mapcapture.DeviceScreenCastManager$")
                 || name.startsWith("cn.ninebot.mapcapture.DeviceScreenCastRequest")
                 || name.equals("cn.ninebot.mapcapture.NBBluetoothRtpSender")

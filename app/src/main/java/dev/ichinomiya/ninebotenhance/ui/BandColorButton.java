@@ -28,7 +28,7 @@ final class BandColorButton extends Button {
     int color() { return color; }
     void setBandColor(int value) {
         BandColor.requireOpaque(value); color = value;
-        sample(this, color); setContentDescription("顶部黑边颜色 " + BandColor.hex(color) + "，点击修改");
+        sample(this,color);setContentDescription("背景颜色 "+BandColor.hex(color)+"，点击修改");
     }
     private void sample(TextView view, int value) {
         view.setText(BandColor.hex(value));
@@ -41,7 +41,7 @@ final class BandColorButton extends Button {
         content.setPadding(dp(20), dp(20), dp(20), dp(20));
         content.setBackground(theme.background(activity, theme.surface, 24, false)); content.setClipToOutline(true);
         content.setForceDarkAllowed(false);
-        TextView title = new TextView(activity); title.setText("顶部黑边颜色"); title.setTextColor(theme.text); title.setTextSize(20);
+        TextView title = new TextView(activity); title.setText("背景颜色"); title.setTextColor(theme.text); title.setTextSize(20);
         title.setPadding(0, 0, 0, dp(16)); content.addView(title);
         LinearLayout body = new LinearLayout(activity); body.setOrientation(LinearLayout.VERTICAL);
         ScrollView scroll = new ScrollView(activity); scroll.addView(body); content.addView(scroll, new LinearLayout.LayoutParams(-1, -2, 1));
@@ -63,7 +63,7 @@ final class BandColorButton extends Button {
             }
             @Override public void afterTextChanged(Editable value) {}
         });
-        int[] colors = {0xff000000, 0xff17191f, DisplaySettings.DEFAULT_TOP_COLOR, 0xff333333, 0xff606060, 0xffffffff};
+        int[] colors = {0xff000000, 0xff17191f, DisplaySettings.DEFAULT_BACKGROUND_COLOR, 0xff333333, 0xff606060, 0xffffffff};
         for (int rowIndex = 0; rowIndex < 2; rowIndex++) {
             LinearLayout row = new LinearLayout(activity); row.setBaselineAligned(false);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2); rowParams.topMargin = dp(8); body.addView(row, rowParams);
@@ -79,7 +79,7 @@ final class BandColorButton extends Button {
         LinearLayout.LayoutParams actionsParams = new LinearLayout.LayoutParams(-1, -2); actionsParams.topMargin = dp(16); content.addView(actions, actionsParams);
         AlertDialog dialog = new AlertDialog.Builder(activity).create(); popup = dialog;
         dialog.setView(content, 0, 0, 0, 0);
-        action(actions, "默认", () -> input.setText(BandColor.hex(DisplaySettings.DEFAULT_TOP_COLOR)));
+        action(actions,"默认",()->input.setText(BandColor.hex(DisplaySettings.DEFAULT_BACKGROUND_COLOR)));
         action(actions, "取消", dialog::dismiss);
         action(actions, "确定", () -> {
             if (!isEnabled() || !isAttachedToWindow()) { dialog.dismiss(); return; }

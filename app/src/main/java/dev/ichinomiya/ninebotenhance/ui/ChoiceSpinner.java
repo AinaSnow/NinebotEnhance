@@ -14,13 +14,16 @@ public final class ChoiceSpinner extends Spinner {
     private final Activity activity;
     private final MirrorUi theme;
     private AlertDialog popup;
+    private Runnable openAction;
 
     public ChoiceSpinner(Activity activity, MirrorUi theme, String title) {
         super(activity, Spinner.MODE_DIALOG);
         this.activity = activity; this.theme = theme; setPrompt(title);
     }
+    public void setOpenAction(Runnable action) { openAction = action; }
     @Override public boolean performClick() {
         if (!isEnabled() || getAdapter() == null) return false;
+        if (openAction != null) { openAction.run(); return true; }
         if (popup != null && popup.isShowing()) return true;
         SpinnerAdapter source = getAdapter();
         int selected = getSelectedItemPosition(), pad = MirrorUi.dp(activity, 20), gap = MirrorUi.dp(activity, 8);

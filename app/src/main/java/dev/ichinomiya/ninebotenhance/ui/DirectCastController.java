@@ -1,6 +1,8 @@
 package dev.ichinomiya.ninebotenhance.ui;
 
 import dev.ichinomiya.ninebotenhance.client.FrameClient;
+import dev.ichinomiya.ninebotenhance.client.ServiceBridge;
+import dev.ichinomiya.ninebotenhance.ipc.Protocol;
 import dev.ichinomiya.ninebotenhance.core.DirectSession;
 import dev.ichinomiya.ninebotenhance.core.DisplaySettings;
 import dev.ichinomiya.ninebotenhance.core.StartPermission;
@@ -84,6 +86,12 @@ public final class DirectCastController implements Application.ActivityLifecycle
         } catch (RuntimeException e) { end(request, true, "巡航启动失败：" + Ipc.error(e)); return; }
         injector.scan(card);
         waitVehicle(request, SystemClock.elapsedRealtime() + 90000);
+    }
+    private View attachedCard(Activity activity) {
+        if (activity == null) return null;
+        for (View card : new ArrayList<>(entryStates.keySet()))
+            if (card != null && card.isAttachedToWindow() && card.isShown() && VehicleCardInjector.activity(card.getContext()) == activity) return card;
+        return null;
     }
     /** Captured at the original power query's invocation, never from a cached previous result. */
     public String vehicleCheckRequest() {
@@ -366,21 +374,33 @@ public final class DirectCastController implements Application.ActivityLifecycle
         utilities.addView(authorization,utilityParams);utilities.addView(statistics,new LinearLayout.LayoutParams(0,-2,1));
         layout.addView(utilities,new LinearLayout.LayoutParams(-1,-2));
         statistics.setOnClickListener(v->StatisticsDialog.show(activity,frames,card));
+        if (ServiceBridge.hyperOs()) {
+            // Without autostart HyperOS refuses the bind that starts the module process; offer the system page directly.
+            Button autostart = new Button(activity); autostart.setText("自启动设置"); theme.button(autostart, null);
+            autostart.setOnClickListener(v -> openAutostart(activity));
+            LinearLayout.LayoutParams autostartParams = new LinearLayout.LayoutParams(-1, -2); autostartParams.topMargin = MirrorUi.dp(activity, 12);
+            layout.addView(autostart, autostartParams);
+            if (!frames.serviceConnected()) connection.setText(frames.serviceStatus());
+        }
+        LinearLayout.LayoutParams widgetParams = new LinearLayout.LayoutParams(-1, -2); widgetParams.topMargin = MirrorUi.dp(activity, 12);
+        Button widgets=new Button(activity);widgets.setText("控件管理");theme.button(widgets,null);layout.addView(widgets,widgetParams);
+        widgets.setOnClickListener(v->WidgetSettingsDialog.show(activity,frames,card));
         TextView appLabel = new TextView(activity); appLabel.setText("启动应用"); appLabel.setTextColor(theme.secondary); appLabel.setPadding(0, pad / 2, 0, pad / 3); layout.addView(appLabel);
-        Spinner appPicker = new ChoiceSpinner(activity, theme, "选择启动应用");
+        ChoiceSpinner appPicker = new ChoiceSpinner(activity, theme, "选择启动应用");
         ArrayList<Bundle> apps = new ArrayList<>();
         AppPickerAdapter appNames = new AppPickerAdapter(activity, frames, theme, apps);
         appPicker.setAdapter(appNames); appPicker.setEnabled(false);
         appPicker.setBackground(theme.background(activity, theme.input, 14, false)); appPicker.setClipToOutline(true);
         layout.addView(appPicker, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout dimensions = fieldRow(activity, layout), options = fieldRow(activity, layout);
-        EditText width = field(activity, fieldColumn(activity, dimensions), "宽度", cached.width, theme),
-                height = field(activity, fieldColumn(activity, dimensions), "高度", cached.height, theme),
-                dpi = field(activity, fieldColumn(activity, options), "DPI", cached.dpi, theme),
-                topInset = field(activity, fieldColumn(activity, options), "黑边高度", cached.topInset, theme);
+        LinearLayout dimensions=fieldRow(activity,layout),virtualDimensions=fieldRow(activity,layout),options=fieldRow(activity,layout);
+        EditText width=field(activity,fieldColumn(activity,dimensions),"整帧宽度",cached.width,theme),
+                height=field(activity,fieldColumn(activity,dimensions),"整帧高度",cached.height,theme),
+                virtualWidth=field(activity,fieldColumn(activity,virtualDimensions),"虚拟屏宽度",cached.virtualWidth,theme),
+                virtualHeight=field(activity,fieldColumn(activity,virtualDimensions),"虚拟屏高度",cached.virtualHeight,theme),
+                dpi=field(activity,fieldColumn(activity,options),"DPI",cached.dpi,theme);
         LinearLayout colorColumn = fieldColumn(activity, options);
-        fieldLabel(activity, colorColumn, "黑边颜色", theme);
-        BandColorButton topColor = new BandColorButton(activity, theme, cached.topColor);
+        fieldLabel(activity, colorColumn, "背景颜色", theme);
+        BandColorButton topColor = new BandColorButton(activity, theme, cached.backgroundColor);
         colorColumn.addView(topColor, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout actions = new LinearLayout(activity); actions.setGravity(Gravity.CENTER_VERTICAL); actions.setBaselineAligned(false);
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-1, -2); actionParams.topMargin = pad / 2;
@@ -410,22 +430,22 @@ public final class DirectCastController implements Application.ActivityLifecycle
         boolean[] loaded = {false};
         Runnable showMode = () -> {
             boolean virtual = frames.cachedPrivilege().usesVirtualDisplay();
-            for (View field : new View[]{appLabel, appPicker, dimensions, options, local, localHelp}) field.setVisibility(virtual ? View.VISIBLE : View.GONE);
+            for (View field : new View[]{appLabel,appPicker,dimensions,virtualDimensions,options,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
             retryParams.setMarginEnd(virtual ? MirrorUi.dp(activity, 12) : 0); retry.setLayoutParams(retryParams);
         };
         showMode.run();
         Runnable read = () -> {
             loaded[0] = false; save.setEnabled(false); retry.setEnabled(false); appPicker.setEnabled(false); local.setEnabled(session.isLocal());
-            String w = width.getText().toString(), h = height.getText().toString(), d = dpi.getText().toString(), inset = topInset.getText().toString();
+            String w=width.getText().toString(),h=height.getText().toString(),d=dpi.getText().toString(),vw=virtualWidth.getText().toString(),vh=virtualHeight.getText().toString();
             int color = topColor.color();
             connection.setText("正在读取已保存参数；当前显示缓存或未保存的输入。");
             frames.getSettings(config -> {
                 if (!usable(activity) || !dialog.isShowing()) return;
                 DisplaySettings value = Ipc.settings(config);
                 boolean edited = !w.equals(width.getText().toString()) || !h.equals(height.getText().toString()) || !d.equals(dpi.getText().toString())
-                        || !inset.equals(topInset.getText().toString()) || color != topColor.color();
+                        ||!vw.equals(virtualWidth.getText().toString())||!vh.equals(virtualHeight.getText().toString())||color!=topColor.color();
                 if (!edited) { width.setText(String.valueOf(value.width)); height.setText(String.valueOf(value.height)); dpi.setText(String.valueOf(value.dpi));
-                    topInset.setText(String.valueOf(value.topInset)); topColor.setBandColor(value.topColor); }
+                    virtualWidth.setText(String.valueOf(value.virtualWidth));virtualHeight.setText(String.valueOf(value.virtualHeight));topColor.setBandColor(value.backgroundColor); }
                 ArrayList<Bundle> catalog = config.getParcelableArrayList(AppCatalog.APPS, Bundle.class);
                 String selected = config.getString(AppCatalog.SELECTED, "");
                 apps.clear(); apps.add(null);
@@ -437,19 +457,34 @@ public final class DirectCastController implements Application.ActivityLifecycle
                 appNames.loaded(); appPicker.setSelection(selectedIndex);
                 boolean idle = session.phase() == DirectSession.Phase.IDLE;
                 loaded[0] = true; retry.setEnabled(true); save.setEnabled(idle);
-                appPicker.setEnabled(idle && apps.size() > 1); local.setEnabled(session.isLocal() || idle);
-                width.setEnabled(idle); height.setEnabled(idle); dpi.setEnabled(idle); topInset.setEnabled(idle); topColor.setEnabled(idle);
+                appPicker.setEnabled(idle); local.setEnabled(session.isLocal() || idle);
+                width.setEnabled(idle);height.setEnabled(idle);dpi.setEnabled(idle);virtualWidth.setEnabled(idle);virtualHeight.setEnabled(idle);topColor.setEnabled(idle);
                 showMode.run();
                 connection.setText(!frames.cachedPrivilege().usesVirtualDisplay() ? "当前方式：无（投屏）。\n开始时通过系统窗口选择单个应用或整个屏幕。"
-                        : "已读取: " + value.width + " × " + value.height + "，" + value.dpi + " DPI。" + (edited ? "\n保留你刚输入的内容。" : "")
-                        + (apps.size() == 1 ? "\n未找到可启动应用。" : selectedIndex == 0
+                        : "已读取: 整帧 "+value.width+" × "+value.height+"，虚拟屏 "+value.virtualWidth+" × "+value.virtualHeight+"，"+value.dpi+" DPI。"+(edited?"\n保留你刚输入的内容。":"")
+                        + (apps.size() == 1 ? "\n请选择启动应用并允许读取应用列表。" : selectedIndex == 0
                             ? (selected.isEmpty() ? "\n请先选择启动应用。" : "\n原应用入口已不可用，请重新选择。") : "")
-                        + (idle ? "" : "\n请先停止投屏再修改。"));
+                        + (idle ? "" : "\n请先停止投屏再修改。")
+                        + (frames.compatibility().isEmpty() ? "" : "\n" + frames.compatibility()));
             }, error -> {
                 if (!usable(activity) || !dialog.isShowing()) return;
                 retry.setEnabled(true); connection.setText(error + "\n当前输入尚未保存，可重新读取或查看日志。");
             });
         };
+        appPicker.setOpenAction(() -> {
+            if (!loaded[0] || session.phase() != DirectSession.Phase.IDLE) return;
+            int index = appPicker.getSelectedItemPosition();
+            String selected = index > 0 && index < apps.size() ? apps.get(index).getString("component", "") : "";
+            frames.pickLaunchApp(activity, theme.dark, selected, app -> {
+                if (!usable(activity) || !dialog.isShowing() || session.phase() != DirectSession.Phase.IDLE) return;
+                String component = app.getString("component", ""); if (component.isEmpty()) return;
+                int match = -1;
+                for (int i = 1; i < apps.size(); i++) if (component.equals(apps.get(i).getString("component"))) { match = i; break; }
+                if (match < 0) { apps.add(app); match = apps.size() - 1; } else apps.set(match, app);
+                appNames.loaded(); appPicker.setSelection(match);
+                // Only the app choice changes. Width, height, DPI and band edits remain unsaved in this dialog.
+            });
+        });
         authorization.setOnClickListener(v -> PrivilegeDialog.show(activity, frames, card, selected -> {
             if (!dialog.isShowing()) return;
             showMode.run(); read.run();
@@ -465,10 +500,10 @@ public final class DirectCastController implements Application.ActivityLifecycle
             String selected = apps.get(index).getString("component");
             try {
                 DisplaySettings next = new DisplaySettings(Integer.parseInt(width.getText().toString().trim()),
-                        Integer.parseInt(height.getText().toString().trim()), Integer.parseInt(dpi.getText().toString().trim()),
-                        Integer.parseInt(topInset.getText().toString().trim()), topColor.color());
+                        Integer.parseInt(height.getText().toString().trim()),Integer.parseInt(virtualWidth.getText().toString().trim()),
+                        Integer.parseInt(virtualHeight.getText().toString().trim()),Integer.parseInt(dpi.getText().toString().trim()),topColor.color());
                 save.setEnabled(false); retry.setEnabled(false); local.setEnabled(false); appPicker.setEnabled(false);
-                width.setEnabled(false); height.setEnabled(false); dpi.setEnabled(false); topInset.setEnabled(false); topColor.setEnabled(false); connection.setText("正在保存…");
+                width.setEnabled(false);height.setEnabled(false);dpi.setEnabled(false);virtualWidth.setEnabled(false);virtualHeight.setEnabled(false);topColor.setEnabled(false);connection.setText("正在保存…");
                 frames.saveSettings(next, selected, error -> {
                     if (!usable(activity) || !dialog.isShowing()) return;
                     if (error == null) {
@@ -476,7 +511,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
                         if (startAfter) startLocal(activity, card); else toast(activity, "启动应用和显示参数已保存");
                     } else {
                         loaded[0] = false; retry.setEnabled(true); local.setEnabled(session.isLocal());
-                        width.setEnabled(true); height.setEnabled(true); dpi.setEnabled(true); topInset.setEnabled(true); topColor.setEnabled(true);
+                        width.setEnabled(true);height.setEnabled(true);dpi.setEnabled(true);virtualWidth.setEnabled(true);virtualHeight.setEnabled(true);topColor.setEnabled(true);
                         connection.setText(error + "\n请重新读取后再保存。");
                     }
                 });
@@ -513,6 +548,19 @@ public final class DirectCastController implements Application.ActivityLifecycle
         TextView text = new TextView(activity); text.setText(label); text.setTextColor(theme.secondary); text.setTextSize(13);
         text.setSingleLine(true); text.setEllipsize(android.text.TextUtils.TruncateAt.END);
         text.setPadding(0, pad, 0, pad / 2); layout.addView(text);
+    }
+    /** MIUI per-app permission editor first, then the autostart manager, then the plain app details page. */
+    private void openAutostart(Activity activity) {
+        Intent[] candidates = {
+            new Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity").putExtra("extra_pkgname", Protocol.MODULE),
+            new Intent("miui.intent.action.OP_AUTO_START").addCategory(Intent.CATEGORY_DEFAULT),
+            new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(android.net.Uri.parse("package:" + Protocol.MODULE)),
+        };
+        for (Intent candidate : candidates) {
+            try { activity.startActivity(candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); frames.report("SETTINGS autostart page " + candidate.getAction()); return; }
+            catch (RuntimeException ignored) {}
+        }
+        frames.report("SETTINGS autostart page unavailable");
     }
     public void entryDetails(Activity activity, View card) {
         if (!usable(activity)) return;

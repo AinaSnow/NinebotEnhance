@@ -79,6 +79,9 @@ def main():
         run([tool(jdk/'bin','javac'),'-encoding','UTF-8','--release','17','-classpath',os.pathsep.join(map(str,[android]+compile_only+runtime)),'-d',classes,'@'+str(response)],records)
         tests=work/'test-classes';tests.mkdir()
         run([tool(jdk/'bin','javac'),'-encoding','UTF-8','--release','17','-classpath',os.pathsep.join(map(str,[classes,android])),'-d',tests]+sorted((ROOT/'tests/java').glob('*.java')),records)
+        # Compile the device-only Canvas checks even when no ADB device is available.
+        device_tests=work/'android-test-classes';device_tests.mkdir()
+        run([tool(jdk/'bin','javac'),'-encoding','UTF-8','--release','17','-classpath',os.pathsep.join(map(str,[classes,android])),'-d',device_tests]+sorted((ROOT/'tests/android').glob('*.java')),records)
         test_output=run([tool(jdk/'bin','java'),'-cp',os.pathsep.join(map(str,[tests,classes,android])),'CoreTests'],records)
         jar=work/'program.jar'
         with zipfile.ZipFile(jar,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -105,7 +108,10 @@ def main():
         assert f"package: name='{PACKAGE}'" in badging and f"versionCode='{code}'" in badging and f"versionName='{name}'" in badging
         assert "application-label:'Ninebot Enhance'" in badging and 'launchable-activity:' not in badging
         manifest=run([tool(bt,'aapt2'),'dump','xmltree',apk,'--file','AndroidManifest.xml'],records)
-        assert len(re.findall(r'^\s*E: activity\s',manifest,re.MULTILINE)) == 1
+        assert len(re.findall(r'^\s*E: activity\s',manifest,re.MULTILINE)) == 3
+        assert '.ui.LaunchAppPickerActivity' in manifest
+        assert '.ui.NotificationSettingsActivity' in manifest and '.notification.MirrorNotificationListener' in manifest
+        assert 'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE' in manifest
         assert '.ui.ScreenCaptureConsentActivity' in manifest and '.service.ScreenCaptureService' in manifest
         assert 'android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION' in manifest
         assert 'rikka.shizuku.ShizukuProvider' in manifest and 'android.permission.INTERACT_ACROSS_USERS_FULL' in manifest
@@ -126,6 +132,10 @@ def main():
                 assert 'L'+PACKAGE.replace('.','/')+'/'+required+';' in definitions,required
             for required in ['core/LogArchive','service/LogShareProvider','service/LogExport','client/LogExporter','platform/ModuleResources','ui/AboutDialog','ui/LogDialog','ui/SettingsFooter']:
                 assert 'L'+PACKAGE.replace('.','/')+'/'+required+';' in definitions,required
+            for required in ['core/NotificationTimeline','notification/DashboardHud','notification/NotificationHub','notification/PhoneStatus','notification/NotificationPreferences','notification/MirrorNotificationListener','ui/NotificationSettingsActivity','ui/LaunchAppPickerActivity']:
+                assert 'L'+PACKAGE.replace('.','/')+'/'+required+';' in definitions,required
+            for required in ['core/MusicPlayback','notification/MusicStatus','core/BatteryTelemetry','hook/VehicleHooks','core/TireTelemetry','hook/TirePressureHooks','ui/WidgetOptionsDialog','ui/WidgetConditionDialog','ui/RangeBar','ui/WidgetSettingsDialog','core/WidgetCondition','core/CardMotion','notification/VolumeStatus','notification/DashboardOcclusion','hook/HookCatalog','core/RegisterProbe','core/RideState','core/HillHoldDetector','ui/RegisterProbeDialog']:
+                assert 'L'+PACKAGE.replace('.','/')+'/'+required+';' in definitions,required
             assert not any(n.startswith(('Lio/github/libxposed/api/','Ldev/ninebot/mirror/')) for n in definitions)
             assert not any(n.endswith(('.jks','.keystore','password.txt')) for n in archive.namelist())
         sha=hashlib.sha256(apk.read_bytes()).hexdigest();(dist/'SHA256SUMS.txt').write_text(sha+'  '+apk.name+'\n',encoding='utf-8')
@@ -135,6 +145,8 @@ def main():
             'android_runtime_tested':False,'m5p_tested':False,'shizuku_sui_device_tested':False,
             'system_screen_capture':True,'system_screen_capture_device_tested':False,
             'project_license':'Apache-2.0','log_file_sharing':True,'log_sharing_device_tested':False,
+            'notification_hud':True,'phone_status_hud':True,'notification_hud_device_tested':False,
+            'vehicle_hud':True,'vehicle_read_commands':['rTirePressureRealTimeInfo','rVoltage','rVoltage2','rVoltage3','rVrlaVoltage'],'vehicle_bay_flags':'rBool','vehicle_hud_device_tested':False,
             'statistics_semantics':'Per-session capture, selected encoder callback, selected RTP submission method; no vehicle acknowledgement or radio throughput claim'},indent=2),encoding='utf-8')
         print('APK: '+str(apk)+'\nSHA256: '+sha)
     finally:

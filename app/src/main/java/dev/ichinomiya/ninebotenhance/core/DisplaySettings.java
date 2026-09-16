@@ -1,37 +1,38 @@
 package dev.ichinomiya.ninebotenhance.core;
 
-/** Bounds apply before allocating any graphics buffers, in both processes. */
+/** Output canvas and independent app buffer, placed at bottom-left without scaling. */
 public final class DisplaySettings {
-    public final int width, height, dpi, topInset, topColor;
-    public DisplaySettings(int width, int height, int dpi) {
-        this(width, height, dpi, 0);
+    public final int width,height,virtualWidth,virtualHeight,dpi,backgroundColor;
+    public static final int DEFAULT_WIDTH=848,DEFAULT_HEIGHT=480,DEFAULT_VIRTUAL_WIDTH=640,DEFAULT_VIRTUAL_HEIGHT=440,DEFAULT_DPI=160;
+    public static final int DEFAULT_BACKGROUND_COLOR=0xff242424,LAYOUT_VERSION=2;
+    public DisplaySettings(int width,int height,int dpi){this(width,height,width,height,dpi,DEFAULT_BACKGROUND_COLOR);}
+    public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor){
+        if(width<320||height<320||width>1920||height>1920||(width&1)!=0||(height&1)!=0||(long)width*height>2073600)
+            throw new IllegalArgumentException("整帧宽高需为 320–1920 的偶数，总像素不超过 1920×1080。");
+        if(virtualWidth<240||virtualHeight<240||virtualWidth>width||virtualHeight>height||(virtualWidth&1)!=0||(virtualHeight&1)!=0)
+            throw new IllegalArgumentException("虚拟屏宽高需为不小于 240 的偶数，且不能超过整帧宽高。");
+        if(dpi<100||dpi>480||Math.min(virtualWidth,virtualHeight)*160L/dpi<160)
+            throw new IllegalArgumentException("DPI 为 100–480，虚拟屏最短边至少 160 dp。");
+        BandColor.requireOpaque(backgroundColor);
+        this.width=width;this.height=height;this.virtualWidth=virtualWidth;this.virtualHeight=virtualHeight;this.dpi=dpi;this.backgroundColor=backgroundColor;
     }
-    public DisplaySettings(int width, int height, int dpi, int topInset) {
-        this(width, height, dpi, topInset, DEFAULT_TOP_COLOR);
+    public static DisplaySettings defaults(){return new DisplaySettings(DEFAULT_WIDTH,DEFAULT_HEIGHT,DEFAULT_VIRTUAL_WIDTH,DEFAULT_VIRTUAL_HEIGHT,DEFAULT_DPI,DEFAULT_BACKGROUND_COLOR);}
+    @FunctionalInterface public interface IntSetting{int get(String key,int fallback);}
+    public static DisplaySettings read(IntSetting values){
+        if(values.get("layout_version",0)<LAYOUT_VERSION){
+            // Old sizes described app content plus top_inset. Preserve that output extent.
+            int width=values.get("width",DEFAULT_WIDTH);
+            long oldHeight=(long)values.get("height",440)+values.get("top_inset",40);
+            if(oldHeight<320||oldHeight>1920)throw new IllegalArgumentException("旧版画面尺寸无效，请重新设置");
+            int height=((int)oldHeight+1)&~1;
+            return new DisplaySettings(width,height,Math.max(240,(int)(width*640L/848)&~1),Math.max(240,(int)(height*440L/480)&~1),
+                    values.get("dpi",DEFAULT_DPI),values.get("top_color",DEFAULT_BACKGROUND_COLOR));
+        }
+        return new DisplaySettings(values.get("width",DEFAULT_WIDTH),values.get("height",DEFAULT_HEIGHT),
+                values.get("virtual_width",DEFAULT_VIRTUAL_WIDTH),values.get("virtual_height",DEFAULT_VIRTUAL_HEIGHT),
+                values.get("dpi",DEFAULT_DPI),values.get("background_color",DEFAULT_BACKGROUND_COLOR));
     }
-    public DisplaySettings(int width, int height, int dpi, int topInset, int topColor) {
-        if (width < 320 || height < 320 || width > 1920 || height > 1920 || (width & 1) != 0 || (height & 1) != 0
-                || (long)width * height > 2073600 || dpi < 100 || dpi > 480
-                || Math.min(width, height) * 160L / dpi < 160)
-            throw new IllegalArgumentException("宽高需为 320–1920 的偶数，总像素不超过 1920×1080；DPI 为 100–480，最短边至少 160 dp。");
-        if (topInset < 0 || topInset >= height)
-            throw new IllegalArgumentException("顶部黑边高度需为 0–" + (height - 1) + " 像素，0 表示关闭。");
-        BandColor.requireOpaque(topColor);
-        this.width = width; this.height = height; this.dpi = dpi; this.topInset = topInset; this.topColor = topColor;
-    }
-    public static final int DEFAULT_WIDTH = 848, DEFAULT_HEIGHT = 440, DEFAULT_DPI = 160, DEFAULT_TOP_INSET = 40;
-    public static final int DEFAULT_TOP_COLOR = 0xff242424;
-    public static DisplaySettings defaults() { return new DisplaySettings(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI, DEFAULT_TOP_INSET); }
-    @FunctionalInterface public interface IntSetting { int get(String key, int fallback); }
-    /** Shared defaults for the service preferences, host cache and IPC; explicit saved zeros remain zeros. */
-    public static DisplaySettings read(IntSetting values) {
-        return new DisplaySettings(values.get("width", DEFAULT_WIDTH), values.get("height", DEFAULT_HEIGHT), values.get("dpi", DEFAULT_DPI),
-                values.get("top_inset", DEFAULT_TOP_INSET), values.get("top_color", DEFAULT_TOP_COLOR));
-    }
-    /** The app keeps width x height; the coloured band adds rows to the composed output only. */
-    public int frameHeight() { return height + topInset; }
-    public String label() { return width + " × " + height + "，" + dpi + " DPI"
-            + (topInset == 0 ? "" : "，顶部黑边 " + topInset + " px，颜色 " + BandColor.hex(topColor)
-                    + "（整帧 " + width + " × " + frameHeight() + "）"); }
+    public int contentTop(){return height-virtualHeight;}
+    public String label(){return "整帧 "+width+" × "+height+"，虚拟屏 "+virtualWidth+" × "+virtualHeight+"，"+dpi+" DPI，背景 "+BandColor.hex(backgroundColor);}
     public static String shellQuote(String value) { return "'" + value.replace("'", "'\\''") + "'"; }
 }

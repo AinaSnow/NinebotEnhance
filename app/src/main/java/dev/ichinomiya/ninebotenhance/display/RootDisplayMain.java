@@ -122,7 +122,7 @@ public final class RootDisplayMain {
         // may pillarbox rotated content inside the landscape RGBA buffer.
         try { flags |= DisplayManager.class.getField("VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED").getInt(null); }
         catch (ReflectiveOperationException ignored) {}
-        VirtualDisplayConfig.Builder builder = new VirtualDisplayConfig.Builder(Protocol.DISPLAY_NAME, settings.width, settings.height, settings.dpi)
+        VirtualDisplayConfig.Builder builder = new VirtualDisplayConfig.Builder(Protocol.DISPLAY_NAME, settings.virtualWidth, settings.virtualHeight, settings.dpi)
                 .setSurface(surface).setFlags(flags).setRequestedRefreshRate(FramePacer.TARGET_FPS);
         log("DISPLAY captureTargetFps=" + FramePacer.TARGET_FPS);
         try { VirtualDisplayConfig.Builder.class.getMethod("setHomeSupported", boolean.class).invoke(builder, false); }
@@ -252,7 +252,7 @@ public final class RootDisplayMain {
             cancelTouch(); return;
         }
         Matrix transform = new Matrix();
-        transform.setValues(DisplayInputTransform.matrix(rotation, settings.width, settings.height, size.x, size.y));
+        transform.setValues(DisplayInputTransform.matrix(rotation, settings.virtualWidth, settings.virtualHeight, size.x, size.y));
         event.transform(transform); event.setSource(InputDevice.SOURCE_TOUCHSCREEN); sendInput(event);
         if (lastTouch != null) { lastTouch.recycle(); lastTouch = null; }
         if (action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL) lastTouch = MotionEvent.obtainNoHistory(event);
@@ -349,7 +349,7 @@ public final class RootDisplayMain {
             Display target = display.getDisplay(); Point size = new Point(); target.getRealSize(size);
             android.util.DisplayMetrics metrics = new android.util.DisplayMetrics(); target.getRealMetrics(metrics);
             log("DISPLAY id=" + displayId + " logical=" + size.x + "x" + size.y + " rotation=" + target.getRotation()
-                    + " dpi=" + metrics.densityDpi + " buffer=" + settings.width + "x" + settings.height);
+                    + " dpi=" + metrics.densityDpi + " buffer=" + settings.virtualWidth + "x" + settings.virtualHeight);
             Class<?> atm = Class.forName("android.app.ActivityTaskManager");
             Object service = atm.getMethod("getService").invoke(null);
             Object tasks = Class.forName("android.app.IActivityTaskManager")

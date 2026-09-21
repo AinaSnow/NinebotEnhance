@@ -8,7 +8,7 @@ package dev.ichinomiya.ninebotenhance.core;
  */
 public final class DisplaySettings {
     public final int width,height,virtualWidth,virtualHeight,dpi,backgroundColor,lightBackgroundColor;
-    public final boolean keepPhoneDpi;
+    public final boolean keepPhoneDpi,compatScale;
     /** Largest logical side WindowManager is asked for; beyond it the dp layout shrinks rather than the density drifting. */
     public static final int MAX_RENDER_SIDE=4096;
     /** Logical size and density the display renders at while the RGBA buffer stays virtualWidth x virtualHeight. */
@@ -20,7 +20,12 @@ public final class DisplaySettings {
     public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor){this(width,height,virtualWidth,virtualHeight,dpi,backgroundColor,DEFAULT_KEEP_PHONE_DPI);}
     public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor,boolean keepPhoneDpi){this(width,height,virtualWidth,virtualHeight,dpi,backgroundColor,keepPhoneDpi,DEFAULT_LIGHT_BACKGROUND_COLOR);}
     /** {@code backgroundColor} fills the frame around the app in the dark dashboard theme, {@code lightBackgroundColor} in the light one. */
-    public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor,boolean keepPhoneDpi,int lightBackgroundColor){
+    public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor,boolean keepPhoneDpi,int lightBackgroundColor){this(width,height,virtualWidth,virtualHeight,dpi,backgroundColor,keepPhoneDpi,lightBackgroundColor,false);}
+    /**
+     * {@code compatScale} is the fallback implementation of keepPhoneDpi for ROMs whose shell may not force a display size: the
+     * display is created at the render plan size with an equally large buffer and the capture path scales it into the virtual area.
+     */
+    public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor,boolean keepPhoneDpi,int lightBackgroundColor,boolean compatScale){
         if(width<DashboardLayout.MIN_SIDE||height<DashboardLayout.MIN_SIDE||width>DashboardLayout.MAX_SIDE||height>DashboardLayout.MAX_SIDE||(width&1)!=0||(height&1)!=0||(long)width*height>2073600)
             throw new IllegalArgumentException("整帧宽高需为 160–1920 的偶数，总像素不超过 1920×1080。");
         if(virtualWidth<DashboardLayout.MIN_SIDE||virtualHeight<DashboardLayout.MIN_SIDE||virtualWidth>width||virtualHeight>height||(virtualWidth&1)!=0||(virtualHeight&1)!=0)
@@ -28,7 +33,7 @@ public final class DisplaySettings {
         if(dpi<100||dpi>480||Math.min(virtualWidth,virtualHeight)*160L/dpi<160)
             throw new IllegalArgumentException("DPI 为 100–480，虚拟屏最短边至少 160 dp。");
         BandColor.requireOpaque(backgroundColor);BandColor.requireOpaque(lightBackgroundColor);
-        this.width=width;this.height=height;this.virtualWidth=virtualWidth;this.virtualHeight=virtualHeight;this.dpi=dpi;this.backgroundColor=backgroundColor;this.keepPhoneDpi=keepPhoneDpi;this.lightBackgroundColor=lightBackgroundColor;
+        this.width=width;this.height=height;this.virtualWidth=virtualWidth;this.virtualHeight=virtualHeight;this.dpi=dpi;this.backgroundColor=backgroundColor;this.keepPhoneDpi=keepPhoneDpi;this.lightBackgroundColor=lightBackgroundColor;this.compatScale=compatScale;
     }
     /** Same dp layout at the phone's density; null when the option is off, the density is unknown or already equal. */
     public RenderPlan renderPlan(int phoneDpi){
@@ -52,18 +57,19 @@ public final class DisplaySettings {
         }
         return new DisplaySettings(values.get("width",DEFAULT_WIDTH),values.get("height",DEFAULT_HEIGHT),
                 values.get("virtual_width",DEFAULT_VIRTUAL_WIDTH),values.get("virtual_height",DEFAULT_VIRTUAL_HEIGHT),
-                values.get("dpi",DEFAULT_DPI),values.get("background_color",DEFAULT_BACKGROUND_COLOR),values.get("keep_phone_dpi",DEFAULT_KEEP_PHONE_DPI?1:0)!=0,values.get("light_background_color",DEFAULT_LIGHT_BACKGROUND_COLOR));
+                values.get("dpi",DEFAULT_DPI),values.get("background_color",DEFAULT_BACKGROUND_COLOR),values.get("keep_phone_dpi",DEFAULT_KEEP_PHONE_DPI?1:0)!=0,values.get("light_background_color",DEFAULT_LIGHT_BACKGROUND_COLOR),values.get("compat_scale",0)!=0);
     }
     /** Same settings inside the frame the cast configuration prescribes; the virtual display shrinks to fit, an unusable frame is ignored. */
     public DisplaySettings withFrame(int frameWidth,int frameHeight){
         int w=frameWidth&~1,h=frameHeight&~1;
         if(w==width&&h==height)return this;
         int maxHeight=SidebarLayout.halfScreen(w,h)?h-SidebarLayout.HALF_SCREEN_TOP_INSET:h;
-        try { return new DisplaySettings(w,h,Math.min(virtualWidth,w)&~1,Math.min(virtualHeight,maxHeight)&~1,dpi,backgroundColor,keepPhoneDpi,lightBackgroundColor); }
+        try { return new DisplaySettings(w,h,Math.min(virtualWidth,w)&~1,Math.min(virtualHeight,maxHeight)&~1,dpi,backgroundColor,keepPhoneDpi,lightBackgroundColor,compatScale); }
         catch(IllegalArgumentException e) { return this; }
     }
+    public DisplaySettings withCompatScale(boolean value){return value==compatScale?this:new DisplaySettings(width,height,virtualWidth,virtualHeight,dpi,backgroundColor,keepPhoneDpi,lightBackgroundColor,value);}
     public int contentTop(){return height-virtualHeight;}
     public int background(boolean dark){return dark?backgroundColor:lightBackgroundColor;}
-    public String label(){return "整帧 "+width+" × "+height+"，虚拟屏 "+virtualWidth+" × "+virtualHeight+"，"+dpi+" DPI"+(keepPhoneDpi?"（保持手机 DPI）":"")+"，背景 "+BandColor.hex(backgroundColor)+" / "+BandColor.hex(lightBackgroundColor);}
+    public String label(){return "整帧 "+width+" × "+height+"，虚拟屏 "+virtualWidth+" × "+virtualHeight+"，"+dpi+" DPI"+(keepPhoneDpi?(compatScale?"（保持手机 DPI，兼容缩放）":"（保持手机 DPI）"):"")+"，背景 "+BandColor.hex(backgroundColor)+" / "+BandColor.hex(lightBackgroundColor);}
     public static String shellQuote(String value) { return "'" + value.replace("'", "'\\''") + "'"; }
 }

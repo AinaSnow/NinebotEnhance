@@ -430,7 +430,15 @@ public final class DirectCastController implements Application.ActivityLifecycle
         android.widget.CheckBox keepDpi=new android.widget.CheckBox(activity);keepDpi.setText("保持 DPI");keepDpi.setTextColor(theme.text);keepDpi.setTextSize(15);
         keepDpi.setButtonTintList(android.content.res.ColorStateList.valueOf(theme.accent));keepDpi.setChecked(cached.keepPhoneDpi);
         keepDpi.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);keepDpi.setIncludeFontPadding(false);keepDpi.setPadding(0,MirrorUi.dp(activity,8),0,MirrorUi.dp(activity,8));
-        layout.addView(keepDpi,new LinearLayout.LayoutParams(-1,-2));
+        android.widget.CheckBox compat=new android.widget.CheckBox(activity);compat.setText("兼容缩放");compat.setTextColor(theme.text);compat.setTextSize(15);
+        compat.setButtonTintList(android.content.res.ColorStateList.valueOf(theme.accent));compat.setChecked(cached.compatScale||frames.compatScaleForced());
+        compat.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);compat.setIncludeFontPadding(false);compat.setPadding(0,MirrorUi.dp(activity,8),0,MirrorUi.dp(activity,8));
+        LinearLayout dpiRow=new LinearLayout(activity);dpiRow.setGravity(Gravity.CENTER_VERTICAL);
+        dpiRow.addView(keepDpi,new LinearLayout.LayoutParams(0,-2,1));dpiRow.addView(compat,new LinearLayout.LayoutParams(0,-2,1));
+        layout.addView(dpiRow,new LinearLayout.LayoutParams(-1,-2));
+        // Compat scaling only makes sense with keep-DPI; once the daemon reported a forced-size failure it stays on.
+        Runnable compatSync=()->{boolean forced=frames.compatScaleForced();if(forced)compat.setChecked(true);compat.setEnabled(keepDpi.isEnabled()&&keepDpi.isChecked()&&!forced);};
+        keepDpi.setOnCheckedChangeListener((b,c)->compatSync.run());compatSync.run();
         LinearLayout actions = new LinearLayout(activity); actions.setGravity(Gravity.CENTER_VERTICAL); actions.setBaselineAligned(false);
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-1, -2); actionParams.topMargin = pad / 2;
         layout.addView(actions, actionParams);
@@ -459,7 +467,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
         boolean[] loaded = {false};
         Runnable showMode = () -> {
             boolean virtual = frames.cachedPrivilege().usesVirtualDisplay();
-            for (View field : new View[]{appLabel,appPicker,virtualDimensions,options,keepDpi,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
+            for (View field : new View[]{appLabel,appPicker,virtualDimensions,options,dpiRow,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
             retryParams.setMarginEnd(virtual ? MirrorUi.dp(activity, 12) : 0); retry.setLayoutParams(retryParams);
         };
         showMode.run();
@@ -474,7 +482,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
                 boolean edited = !w.equals(width.getText().toString()) || !h.equals(height.getText().toString()) || !d.equals(dpi.getText().toString())
                         ||!vw.equals(virtualWidth.getText().toString())||!vh.equals(virtualHeight.getText().toString())||color!=topColor.color()||light!=lightColor.color()||keep!=keepDpi.isChecked();
                 if (!edited) { width.setText(String.valueOf(value.width)); height.setText(String.valueOf(value.height)); dpi.setText(String.valueOf(value.dpi));
-                    virtualWidth.setText(String.valueOf(value.virtualWidth));virtualHeight.setText(String.valueOf(value.virtualHeight));topColor.setBandColor(value.backgroundColor);lightColor.setBandColor(value.lightBackgroundColor);keepDpi.setChecked(value.keepPhoneDpi); }
+                    virtualWidth.setText(String.valueOf(value.virtualWidth));virtualHeight.setText(String.valueOf(value.virtualHeight));topColor.setBandColor(value.backgroundColor);lightColor.setBandColor(value.lightBackgroundColor);keepDpi.setChecked(value.keepPhoneDpi);compat.setChecked(value.compatScale||frames.compatScaleForced());compatSync.run(); }
                 ArrayList<Bundle> catalog = config.getParcelableArrayList(AppCatalog.APPS, Bundle.class);
                 String selected = config.getString(AppCatalog.SELECTED, "");
                 apps.clear(); apps.add(null);
@@ -487,7 +495,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
                 boolean idle = session.phase() == DirectSession.Phase.IDLE;
                 loaded[0] = true; retry.setEnabled(true); save.setEnabled(idle);
                 appPicker.setEnabled(idle); local.setEnabled(session.isLocal() || idle);
-                width.setEnabled(idle);height.setEnabled(idle);dpi.setEnabled(idle);virtualWidth.setEnabled(idle);virtualHeight.setEnabled(idle);topColor.setEnabled(idle);lightColor.setEnabled(idle);keepDpi.setEnabled(idle);
+                width.setEnabled(idle);height.setEnabled(idle);dpi.setEnabled(idle);virtualWidth.setEnabled(idle);virtualHeight.setEnabled(idle);topColor.setEnabled(idle);lightColor.setEnabled(idle);keepDpi.setEnabled(idle);compatSync.run();
                 showMode.run();
                 connection.setText(!frames.cachedPrivilege().usesVirtualDisplay() ? "当前方式：无（投屏）。\n开始时通过系统窗口选择单个应用或整个屏幕。"
                         : "已读取: 整帧 "+value.width+" × "+value.height+"，虚拟屏 "+value.virtualWidth+" × "+value.virtualHeight+"，"+value.dpi+" DPI"+(value.keepPhoneDpi?"，保持手机 DPI":"")+"。"+(edited?"\n保留你刚输入的内容。":"")
@@ -530,9 +538,9 @@ public final class DirectCastController implements Application.ActivityLifecycle
             try {
                 DisplaySettings next = new DisplaySettings(frames.frameWidth(),
                         frames.frameHeight(),Integer.parseInt(virtualWidth.getText().toString().trim()),
-                        Integer.parseInt(virtualHeight.getText().toString().trim()),Integer.parseInt(dpi.getText().toString().trim()),topColor.color(),keepDpi.isChecked(),lightColor.color());
+                        Integer.parseInt(virtualHeight.getText().toString().trim()),Integer.parseInt(dpi.getText().toString().trim()),topColor.color(),keepDpi.isChecked(),lightColor.color(),compat.isChecked()&&keepDpi.isChecked());
                 save.setEnabled(false); retry.setEnabled(false); local.setEnabled(false); appPicker.setEnabled(false);
-                width.setEnabled(false);height.setEnabled(false);dpi.setEnabled(false);virtualWidth.setEnabled(false);virtualHeight.setEnabled(false);topColor.setEnabled(false);lightColor.setEnabled(false);keepDpi.setEnabled(false);connection.setText("正在保存…");
+                width.setEnabled(false);height.setEnabled(false);dpi.setEnabled(false);virtualWidth.setEnabled(false);virtualHeight.setEnabled(false);topColor.setEnabled(false);lightColor.setEnabled(false);keepDpi.setEnabled(false);compatSync.run();connection.setText("正在保存…");
                 frames.saveSettings(next, selected, error -> {
                     if (!usable(activity) || !dialog.isShowing()) return;
                     if (error == null) {
@@ -540,7 +548,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
                         if (startAfter) startLocal(activity, card); else toast(activity, "启动应用和显示参数已保存");
                     } else {
                         loaded[0] = false; retry.setEnabled(true); local.setEnabled(session.isLocal());
-                        width.setEnabled(true);height.setEnabled(true);dpi.setEnabled(true);virtualWidth.setEnabled(true);virtualHeight.setEnabled(true);topColor.setEnabled(true);lightColor.setEnabled(true);keepDpi.setEnabled(true);
+                        width.setEnabled(true);height.setEnabled(true);dpi.setEnabled(true);virtualWidth.setEnabled(true);virtualHeight.setEnabled(true);topColor.setEnabled(true);lightColor.setEnabled(true);keepDpi.setEnabled(true);compatSync.run();
                         connection.setText(error + "\n请重新读取后再保存。");
                     }
                 });

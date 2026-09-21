@@ -104,6 +104,7 @@ public final class FrameBridgeService extends Service {
                             android.app.PendingIntent consent = projection.begin(args.getString(Protocol.REQUEST), surface, args.getBinder("owner"), uid, size);
                             projectionSource = true; result = projection.status(); result.putParcelable(Protocol.CAPTURE_CONSENT, consent);
                         } else {
+                            session.setRenderPlan(args.getInt(Protocol.CAPTURE_WIDTH, 0), args.getInt(Protocol.CAPTURE_HEIGHT, 0), args.getInt("render_dpi", 0));
                             session.begin(args.getString(Protocol.REQUEST), surface, args.getBinder("owner"), uid, Ipc.settings(args), args.getString(AppCatalog.SELECTED));
                             projectionSource = false; result = session.status();
                         }

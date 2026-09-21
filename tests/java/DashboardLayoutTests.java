@@ -72,6 +72,9 @@ final class DashboardLayoutTests {
         check(wide.scale()==1&&wide.dx()==0&&wide.dy()==0,"the reference frame maps onto itself");
         check(SidebarLayout.notificationWidth(312,true)==190&&SidebarLayout.notificationWidth(312,false)==312&&SidebarLayout.notificationWidth(180,true)==180,"half-screen notifications are capped at the column width");
         check(small.virtualHeight==300&&DisplaySettings.defaults().withFrame(636,360).virtualHeight==360,"a portrait frame keeps a 20 px strip above the app");
+        DisplaySettings compat=new DisplaySettings(848,480,640,440,160,0xff242424,true,0xffe6eaee,true);
+        check(compat.compatScale&&compat.withFrame(636,360).compatScale&&!compat.withCompatScale(false).compatScale&&compat.withCompatScale(true)==compat&&compat.label().contains("兼容缩放")&&!DisplaySettings.defaults().compatScale,"compat scaling is carried through reframing and shown in the label");
+        check(DisplaySettings.read((k,f)->k.equals("compat_scale")?1:k.equals("layout_version")?2:f).compatScale&&!DisplaySettings.read((k,f)->k.equals("layout_version")?2:f).compatScale,"compat scaling round-trips through the settings reader");
         int stackMask=WidgetSettings.PHONE|WidgetSettings.MUSIC|WidgetSettings.TYRES|WidgetSettings.VOLTAGE|WidgetSettings.SPEED|WidgetSettings.POWER|WidgetSettings.LAMP;
         SidebarLayout.Stack single=SidebarLayout.arrange(WidgetSettings.DEFAULT,stackMask,0,SidebarLayout.fullWidth(),true,List.of(SidebarLayout.INSTRUMENT),true);
         SidebarLayout.Stack twoColumn=SidebarLayout.arrange(WidgetSettings.DEFAULT,stackMask,0,SidebarLayout.fullWidth(),false,List.of(SidebarLayout.INSTRUMENT),false);

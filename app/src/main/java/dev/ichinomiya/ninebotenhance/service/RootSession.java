@@ -23,6 +23,8 @@ import java.util.UUID;
 
 /** Module-process broker. Never performs su or remote Binder calls while holding the session lock. */
 public final class RootSession {
+    /** The daemon could not force the display size: the client switches keep-DPI to compat scaling from the next session. */
+    private volatile boolean renderFallback;
     private static RootSession instance;
     public static synchronized RootSession get(Context context) {
         if (instance == null) instance = new RootSession(context.getApplicationContext());
@@ -95,10 +97,13 @@ public final class RootSession {
             context.getSharedPreferences("virtual_display", 0).edit().putInt("width", value.width)
                     .putInt("height",value.height).putInt("dpi",value.dpi)
                     .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
-                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
+                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("compat_scale",value.compatScale?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, app.flattenToString()).apply();
         }
     }
+    /** Compat scaling: the capture surface size and density the client chose for this session (0 when not in use). */
+    private int renderWidth, renderHeight, renderDpi;
+    public synchronized void setRenderPlan(int width, int height, int dpi) { renderWidth = width; renderHeight = height; renderDpi = dpi; }
     public void begin(String request, Surface output, IBinder client, int uid, DisplaySettings requested, String selected) throws RemoteException {
         if (!Protocol.validRequest(request) || output == null || !output.isValid() || client == null || !client.isBinderAlive()) {
             if (output != null) output.release(); throw new IllegalArgumentException("虚拟屏接收端未就绪");
@@ -165,6 +170,7 @@ public final class RootSession {
             result.putInt("uid", android.os.Process.myUid()); result.putInt("ownerUid", ownerUid);
             result.putParcelable(AppCatalog.SELECTED, launchApp);
             Ipc.settings(result, current); state = "正在创建虚拟显示器";
+            result.putInt(Protocol.CAPTURE_WIDTH, renderWidth); result.putInt(Protocol.CAPTURE_HEIGHT, renderHeight); result.putInt("render_dpi", renderDpi);
         } else {
             if (!lease.authorize(secret)) throw new SecurityException("过期的辅助进程");
             if ("ready".equals(method)) {
@@ -180,6 +186,8 @@ public final class RootSession {
                 if (!lease.isReady() || root == null) throw new SecurityException("副屏尚未就绪");
                 appRecovery = args.getInt(Protocol.APP_RECOVERY); appRecoveryDetail = LogDigest.head(args.getString(Protocol.APP_RECOVERY_DETAIL, ""), 500);
                 appRecoveryAt = SystemClock.elapsedRealtime();
+            } else if ("render_fallback".equals(method)) {
+                renderFallback = true; Diagnostics.add("ROOT RENDER fallback reported; compat scaling will be forced for the next session");
             } else if ("error".equals(method)) {
                 String request = lease.request(), error = args.getString("error", "未知错误");
                 main.post(() -> stop(request, error));
@@ -198,7 +206,7 @@ public final class RootSession {
         result.putBoolean("active", lease.request() != null); result.putBoolean("ready", lease.isReady());
         result.putInt("displayId", displayId); result.putString("state", state);
         result.putString("backend", backend);
-        result.putString(Protocol.APP_LAYOUT_POLICY, appLayoutPolicy);
+        result.putString(Protocol.APP_LAYOUT_POLICY, appLayoutPolicy); result.putBoolean("render_fallback", renderFallback);
         result.putString(AppCatalog.SELECTED, launchApp == null ? "" : launchApp.flattenToString());
         boolean recent = appRecoveryAt != 0 && SystemClock.elapsedRealtime() - appRecoveryAt < 5000 && lease.isReady();
         result.putInt(Protocol.APP_RECOVERY, recent ? appRecovery : AppRecoveryState.HIDDEN);

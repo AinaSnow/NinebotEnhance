@@ -143,6 +143,7 @@ public final class FrameClient {
                 savedSettings = DisplaySettings.read(p::getInt);
                 savedApp = p.getString(AppCatalog.SELECTED, "");
                 savedPrivilege = PrivilegeMode.parse(p.getString("privilege_mode", "AUTO"));
+                compatScaleForced = p.getInt("compat_scale_forced", 0) != 0;
             } catch (RuntimeException e) { report("SETTINGS cache " + Ipc.error(e)); }
             // Developer options live for one run of the host: the version taps, calibration, register probe and navigation test
             // all start hidden and off, whatever an earlier run left behind.
@@ -330,7 +331,13 @@ public final class FrameClient {
                     loadDashboardLayout(battery.selectedKey());
                     settings = value.withFrame(frameWidth(), frameHeight()); cacheSettings(value, selected); closeFrames();
                     if (settings != value) report("LAYOUT frame " + settings.width + "x" + settings.height + " from the cast configuration");
+                    if (compatScaleForced && settings.keepPhoneDpi && !settings.compatScale) settings = settings.withCompatScale(true);
+                    compatPlan = null;
                     int width = settings.virtualWidth, height = settings.virtualHeight;
+                    if (!screenCapture && settings.keepPhoneDpi && settings.compatScale) {
+                        DisplaySettings.RenderPlan plan = settings.renderPlan(phoneDensityDpi());
+                        if (plan != null) { compatPlan = plan; width = plan.width(); height = plan.height(); report("RENDER compat plan " + width + "x" + height + "@" + plan.dpi() + " scaled into " + settings.virtualWidth + "x" + settings.virtualHeight); }
+                    }
                     if (screenCapture) {
                         Rect bounds = activity.getSystemService(android.view.WindowManager.class).getMaximumWindowMetrics().getBounds();
                         CaptureSize capture = CaptureSize.fit(bounds.width(), bounds.height()); width = capture.width(); height = capture.height();
@@ -348,6 +355,7 @@ public final class FrameClient {
                     args.putString(AppCatalog.SELECTED, selected);
                     args.putBoolean(Protocol.SCREEN_CAPTURE, screenCapture); args.putBoolean("local", mode == DirectSession.Mode.LOCAL);
                     args.putInt(Protocol.CAPTURE_WIDTH, width); args.putInt(Protocol.CAPTURE_HEIGHT, height);
+                    if (compatPlan != null) args.putInt("render_dpi", compatPlan.dpi());
                     Bundle status = bridge.call(Protocol.BEGIN, args);
                     if (completed.get() || !request.equals(ownerRequest)) { stopDirect(request); return; }
                     beginAccepted = request; acceptStatus(request, status);
@@ -396,9 +404,13 @@ public final class FrameClient {
             Image.Plane plane = image.getPlanes()[0];
             int width=source.getWidth(),height=source.getHeight();
             int frameWidth=screenCapture?width:settings.width,frameHeight=screenCapture?height:settings.height;
-            PixelPacking.compose(plane.getBuffer(),plane.getRowStride(),plane.getPixelStride(),width,height,packed,frameWidth,frameHeight,settings.background(dashboardDark),!screenCapture&&settings.keepPhoneDpi);
-            Bitmap bitmap = Bitmap.createBitmap(frameWidth,frameHeight,Bitmap.Config.ARGB_8888);
-            bitmap.copyPixelsFromBuffer(packed); bitmap.setDensity(Bitmap.DENSITY_NONE);
+            Bitmap bitmap;
+            if (compatPlan != null && !screenCapture) bitmap = composeScaled(plane, width, height, frameWidth, frameHeight);
+            else {
+                PixelPacking.compose(plane.getBuffer(),plane.getRowStride(),plane.getPixelStride(),width,height,packed,frameWidth,frameHeight,settings.background(dashboardDark),!screenCapture&&settings.keepPhoneDpi);
+                bitmap = Bitmap.createBitmap(frameWidth,frameHeight,Bitmap.Config.ARGB_8888); bitmap.copyPixelsFromBuffer(packed);
+            }
+            bitmap.setDensity(Bitmap.DENSITY_NONE);
             if(lastImage==0)report("RGBA first frame "+frameWidth+"x"+frameHeight+" content="+width+"x"+height+" position=0,"+(frameHeight-height)+" source="+(screenCapture?"MediaProjection":"VirtualDisplay"));
             synchronized (frameLock) { latest = bitmap; lastImage = now; }
             framePacer.captured(now);
@@ -548,6 +560,7 @@ public final class FrameClient {
         if (request.equals(status.getString(Protocol.REQUEST))) {
             active = status.getBoolean("active"); displayReady = status.getBoolean("ready"); state = status.getString("state", "");
             appRecovery = status.getInt(Protocol.APP_RECOVERY); appRecoveryDetail = status.getString(Protocol.APP_RECOVERY_DETAIL, "");
+            if (status.getBoolean("render_fallback")) forceCompatScale();
         } else {
             active = displayReady = false; state = "模块服务已重启或会话已失效，请重新开始投屏";
             appRecovery = AppRecoveryState.HIDDEN; appRecoveryDetail = "";
@@ -780,6 +793,37 @@ public final class FrameClient {
         return calibration;
     }
     public PrivilegeMode cachedPrivilege() { return savedPrivilege; }
+    /** Set once the daemon reported that it could not force the display size; keep-DPI then always uses compat scaling. */
+    private volatile boolean compatScaleForced;
+    private DisplaySettings.RenderPlan compatPlan;
+    private ByteBuffer compatTight;private Bitmap compatSource;
+    private final android.graphics.Paint compatPaint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+    public boolean compatScaleForced() { return compatScaleForced; }
+    private void forceCompatScale() {
+        if (compatScaleForced) return;
+        compatScaleForced = true;
+        try { if (context != null) context.getSharedPreferences("dev.ichinomiya.ninebotenhance.cached_display", Context.MODE_PRIVATE).edit().putInt("compat_scale_forced", 1).apply(); }
+        catch (RuntimeException e) { report("RENDER compat flag write " + Ipc.error(e)); }
+        report("RENDER compat scaling forced: keep-DPI renders at the plan size from the next session");
+    }
+    private int phoneDensityDpi() {
+        try {
+            android.view.Display phone = context.getSystemService(android.hardware.display.DisplayManager.class).getDisplay(android.view.Display.DEFAULT_DISPLAY);
+            android.util.DisplayMetrics metrics = new android.util.DisplayMetrics(); phone.getRealMetrics(metrics); return metrics.densityDpi;
+        } catch (RuntimeException e) { report("RENDER phone density unavailable " + Ipc.error(e)); return 0; }
+    }
+    /** Compat scaling: the plan-sized RGBA buffer is packed tight, then filtered down into the virtual area of a fresh frame bitmap. */
+    private Bitmap composeScaled(Image.Plane plane, int width, int height, int frameWidth, int frameHeight) {
+        int bytes = width * height * 4;
+        if (compatTight == null || compatTight.capacity() < bytes) compatTight = ByteBuffer.allocateDirect(bytes);
+        PixelPacking.rgba(plane.getBuffer(), plane.getRowStride(), plane.getPixelStride(), width, height, compatTight);
+        if (compatSource == null || compatSource.getWidth() != width || compatSource.getHeight() != height) compatSource = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        compatSource.copyPixelsFromBuffer(compatTight);
+        Bitmap frame = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(frame); canvas.drawColor(settings.background(dashboardDark));
+        canvas.drawBitmap(compatSource, null, new android.graphics.Rect(0, frameHeight - settings.virtualHeight, settings.virtualWidth, frameHeight), compatPaint);
+        return frame;
+    }
     public void appIcon(String component, android.widget.ImageView target) { appIcons.load(component, target); }
     private void cacheSettings(DisplaySettings value, String selected) {
         savedSettings = value; savedApp = selected;
@@ -787,7 +831,7 @@ public final class FrameClient {
             if (context != null) context.getSharedPreferences("dev.ichinomiya.ninebotenhance.cached_display", Context.MODE_PRIVATE).edit()
                     .putInt("width",value.width).putInt("height",value.height).putInt("dpi",value.dpi)
                     .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
-                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
+                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("compat_scale",value.compatScale?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, selected).apply();
         } catch (RuntimeException e) { report("SETTINGS cache write " + Ipc.error(e)); }
     }

@@ -63,6 +63,8 @@ public final class RootDisplayMain {
     private String resumeUri;private int resumePolls;
     private static final long RESUME_POLL_MS=500,RESUME_SETTLE_MS=2500;private static final int RESUME_POLLS=40;
 
+    /** Compat scaling: the display is created at the capture size and render density the client chose; nothing is forced later. */
+    private int renderDpi, captureWidth, captureHeight; private boolean compatRender;
     public static void main(String[] args) {
         if (args.length != 1 || !Protocol.validRequest(args[0])) System.exit(2);
         RootDisplayMain daemon = null;
@@ -110,11 +112,23 @@ public final class RootDisplayMain {
             }
         }, "Mirror-OwnerWatchdog").start();
         settings = Ipc.settings(config); surface = config.getParcelable("surface", Surface.class);
+        renderDpi = config.getInt("render_dpi", 0); captureWidth = config.getInt(Protocol.CAPTURE_WIDTH, 0); captureHeight = config.getInt(Protocol.CAPTURE_HEIGHT, 0);
+        compatRender = false;
         selectedApp = config.getParcelable(AppCatalog.SELECTED, ComponentName.class);
         if (selectedApp == null) throw new IllegalArgumentException("缺少已选择的启动应用，请回设置选择");
         if (surface == null || !surface.isValid()) throw new IllegalStateException("接收 Surface 已关闭");
         Constructor<DisplayManager> constructor = DisplayManager.class.getDeclaredConstructor(Context.class); constructor.setAccessible(true);
         DisplayManager manager = constructor.newInstance(context);
+        if (settings.keepPhoneDpi && settings.compatScale) {
+            // The surface the client created is plan sized; the display must be created at exactly that size, or the system
+            // paints a small display into the top-left corner of the large buffer.
+            if (renderDpi > 0 && captureWidth > 0 && captureHeight > 0) compatRender = true;
+            else {
+                DisplaySettings.RenderPlan plan = settings.renderPlan(phoneDensityDpi(manager));
+                if (plan != null) { compatRender = true; captureWidth = plan.width(); captureHeight = plan.height(); renderDpi = plan.dpi(); }
+            }
+            log("RENDER compat " + (compatRender ? captureWidth + "x" + captureHeight + "@" + renderDpi : "not needed"));
+        }
         // Public own-content display, touch input, destroy its tasks on removal, trusted independent focus.
         // Independent keyguard state, like VirtualDisplay's default ALWAYS_UNLOCKED option.
         int flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
@@ -126,7 +140,8 @@ public final class RootDisplayMain {
         // may pillarbox rotated content inside the landscape RGBA buffer.
         try { flags |= DisplayManager.class.getField("VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED").getInt(null); }
         catch (ReflectiveOperationException ignored) {}
-        VirtualDisplayConfig.Builder builder = new VirtualDisplayConfig.Builder(Protocol.DISPLAY_NAME, settings.virtualWidth, settings.virtualHeight, settings.dpi)
+        VirtualDisplayConfig.Builder builder = new VirtualDisplayConfig.Builder(Protocol.DISPLAY_NAME, compatRender ? captureWidth : settings.virtualWidth,
+                compatRender ? captureHeight : settings.virtualHeight, compatRender ? renderDpi : settings.dpi)
                 .setSurface(surface).setFlags(flags).setRequestedRefreshRate(FramePacer.TARGET_FPS);
         log("DISPLAY captureTargetFps=" + FramePacer.TARGET_FPS);
         try { VirtualDisplayConfig.Builder.class.getMethod("setHomeSupported", boolean.class).invoke(builder, false); }
@@ -165,7 +180,14 @@ public final class RootDisplayMain {
         displayId = display.getDisplay().getDisplayId();
         if (displayId <= 0) throw new IllegalStateException("系统返回了非独立显示器");
         log("DISPLAY created id=" + displayId + " buffer=" + settings.label() + " flags=0x" + Integer.toHexString(flags) + " sharedMemory=" + sharedMemoryStatus);
-        applyRenderPlan(manager);
+        // Keep-phone-DPI is an optimisation: some ROMs deny WRITE_SECURE_SETTINGS to shell, and the display then simply keeps its
+        // buffer size and layout density, exactly as with the option off. Nothing else in the session depends on it.
+        if (compatRender) log("RENDER compat logical=" + captureWidth + "x" + captureHeight + " dpi=" + renderDpi + " scaled by the capture path into " + settings.virtualWidth + "x" + settings.virtualHeight);
+        else try { applyRenderPlan(manager); }
+        catch (Exception e) {
+            log("RENDER unavailable, keeping buffer size and layout density: " + Ipc.error(e)); clearRenderPlan();
+            try { providerCall("render_fallback", new Bundle()); } catch (Exception ignored) {}
+        }
         try {
             displayOrientation = new RootDisplayOrientation(display.getDisplay(), this::log);
             displayOrientation.start();
@@ -481,6 +503,15 @@ public final class RootDisplayMain {
         }
         log("RENDER logical=" + plan.width() + "x" + plan.height() + " dpi=" + plan.dpi() + " buffer=" + settings.virtualWidth + "x" + settings.virtualHeight
                 + " layoutDpi=" + settings.dpi + " phoneDpi=" + phoneDpi);
+    }
+    /** Undo a partially applied render plan so the display is left at its buffer size; failures here are already reported. */
+    private void clearRenderPlan() {
+        try {
+            Object windowManager = Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null);
+            Class<?> api = Class.forName("android.view.IWindowManager");
+            try { api.getMethod("clearForcedDisplaySize", int.class).invoke(windowManager, displayId); } catch (Exception ignored) {}
+            try { api.getMethod("clearForcedDisplayDensityForUser", int.class, int.class).invoke(windowManager, displayId, moduleUid / 100000); } catch (Exception ignored) {}
+        } catch (Exception ignored) {}
     }
     private static int phoneDensityDpi(DisplayManager manager) {
         Display phone = manager.getDisplay(Display.DEFAULT_DISPLAY);

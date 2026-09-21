@@ -12,8 +12,10 @@ public final class PreviewToolbar extends LinearLayout {
     private MirrorUi theme;
     private final PreviewPicture picture;
     private final Button back, rotate, keyboard, simulate, stop;
+    private Button dashboard;
     private boolean configured, wasCompact;
-    public PreviewToolbar(Context context, MirrorUi theme, String label, PreviewPicture picture, Runnable end, Runnable diagnostics, Runnable simulateNotification) {
+    public PreviewToolbar(Context context, MirrorUi theme, String label, PreviewPicture picture, Runnable end, Runnable diagnostics, Runnable simulateNotification,
+                          java.util.function.BooleanSupplier dashboardDark, Runnable toggleDashboardTheme) {
         super(context); this.theme = theme; this.picture = picture;
         setGravity(Gravity.CENTER_VERTICAL); setBackgroundColor(theme.surface);
         setPadding(dp(10), dp(4), dp(10), dp(4));
@@ -25,7 +27,11 @@ public final class PreviewToolbar extends LinearLayout {
         back = action("返回", "back", picture::back);
         rotate = action("横屏", "rotate", picture::toggleRotation);
         keyboard = action("输入法", "keyboard", picture::toggleKeyboard);
-        simulate = action("模拟通知", null, simulateNotification);
+        dashboard = action(dashboardDark.getAsBoolean() ? "深色" : "浅色", null, () -> {
+            toggleDashboardTheme.run(); dashboard.setText(dashboardDark.getAsBoolean() ? "深色" : "浅色"); dashboard.setContentDescription(dashboard.getText());
+        });
+        // Only the local simulation offers the synthetic notification card; a null action leaves the button out.
+        simulate = simulateNotification == null ? null : action("通知", null, simulateNotification);
         stop = action("结束", "stop", end);
         picture.onControlsChanged = () -> {
             rotate.setText(picture.rotated() ? "还原" : "横屏");
@@ -38,7 +44,7 @@ public final class PreviewToolbar extends LinearLayout {
         if (theme.dark == next.dark) return;
         theme = next; setBackgroundColor(theme.surface); title.setTextColor(theme.text);
         style(back, "back", false); style(rotate, "rotate", picture.rotated());
-        style(keyboard, "keyboard", picture.keyboardActive()); style(simulate, null, false); style(stop, "stop", false);
+        style(keyboard, "keyboard", picture.keyboardActive()); style(dashboard, null, false); if (simulate != null) style(simulate, null, false); style(stop, "stop", false);
     }
     private Button action(String label, String icon, Runnable action) {
         Button button = new Button(getContext()); button.setText(label); button.setContentDescription(label);
@@ -49,9 +55,8 @@ public final class PreviewToolbar extends LinearLayout {
     private void style(Button button, String icon, boolean active) {
         theme.button(button, null); button.setTextSize(12); button.setPadding(dp(6), 0, dp(6), 0);
         button.setTextColor(active ? theme.accent : theme.text);
-        if (icon == null) button.setCompoundDrawablesRelative(null, null, null, null);
-        else { MirrorUi.Glyph glyph = new MirrorUi.Glyph(icon, active ? theme.accent : theme.secondary); glyph.setBounds(0, 0, dp(16), dp(16)); button.setCompoundDrawablesRelative(glyph, null, null, null); }
-        button.setCompoundDrawablePadding(dp(4)); button.setSelected(active);
+        // Text only: with five labelled actions there is no room for glyphs.
+        button.setCompoundDrawablesRelative(null, null, null, null); button.setSelected(active);
         button.setContentDescription(button.getText());
     }
     @Override protected void onMeasure(int widthSpec, int heightSpec) {
@@ -59,7 +64,7 @@ public final class PreviewToolbar extends LinearLayout {
         if (!configured || wasCompact != compact) {
             configured = true; wasCompact = compact; setOrientation(compact ? VERTICAL : HORIZONTAL);
             title.setLayoutParams(compact ? new LayoutParams(-1, dp(28)) : new LayoutParams(0, dp(48), 1));
-            actions.setLayoutParams(new LayoutParams(compact ? -1 : dp(440), dp(48)));
+            actions.setLayoutParams(new LayoutParams(compact ? -1 : dp(simulate == null ? 440 : 500), dp(48)));
         }
         super.onMeasure(widthSpec, heightSpec);
     }

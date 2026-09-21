@@ -18,7 +18,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /**
- * Observe the verified 6.10.10 DynamicDevice response path for the selected vehicle and decode the pack voltage
+ * Observe the verified 6.10.10 / 6.10.11 DynamicDevice response path for the selected vehicle and decode the pack voltage
  * and the tyre real-time frame. The optional refresh sends the same read-only commands through the Ninebot
  * sendCommand API (queued first, no retries) on the intervals chosen in the vehicle card settings, because the
  * Ninebot detail page stops its own polling while casting. A bounded bus census in the module log shows what
@@ -103,6 +103,8 @@ public final class VehicleHooks {
         HandlerThread thread=new HandlerThread("Ninebot-VehicleRead");thread.start();reader=new Handler(thread.getLooper());
     }
     public int hookCount(){return installed.size();}
+    /** The DynamicDevice class once seen; shared with the navigation test sender. */
+    public Class<?> deviceClass(){return deviceClass;}
     public int hitCount(){return hits.size();}
     public static boolean interesting(String name){return DEVICE.equals(name);}
     public void inspect(Class<?> type){

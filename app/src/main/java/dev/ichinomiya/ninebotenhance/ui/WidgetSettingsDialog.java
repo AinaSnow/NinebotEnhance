@@ -32,6 +32,11 @@ public final class WidgetSettingsDialog {
         reads.setOnClickListener(v->WidgetOptionsDialog.reads(activity,frames,reference));
         LinearLayout.LayoutParams readParams=new LinearLayout.LayoutParams(-1,-2);readParams.topMargin=MirrorUi.dp(activity,8);readParams.bottomMargin=MirrorUi.dp(activity,8);content.addView(reads,readParams);
         content.addView(row(activity,frames,reference,theme,settings,WidgetSettings.HILL_HOLD_DODGE,checks,null,null),rowParams(activity));
+        // Live phone navigation relayed to the dashboard (preference navi_live, default on); saved with the rest of the dialog.
+        CheckBox naviLive=new CheckBox(activity);naviLive.setText("手机导航上仪表");naviLive.setTextColor(theme.text);naviLive.setTextSize(16);
+        naviLive.setButtonTintList(android.content.res.ColorStateList.valueOf(theme.accent));naviLive.setChecked(frames.naviLive());
+        LinearLayout naviRow=new LinearLayout(activity);naviRow.setOrientation(LinearLayout.HORIZONTAL);naviRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        naviRow.addView(naviLive,new LinearLayout.LayoutParams(0,-2,1));content.addView(naviRow,rowParams(activity));
         scroll.addView(content);
         TextView title=new TextView(activity);title.setText("控件管理");title.setTextSize(20);title.setTextColor(theme.text);title.setPadding(pad,pad,pad,pad/2);
         AlertDialog dialog=new AlertDialog.Builder(activity).setCustomTitle(title).setView(scroll).setNegativeButton("关闭",null)
@@ -41,6 +46,7 @@ public final class WidgetSettingsDialog {
                     for(Map.Entry<Integer,CheckBox> e:checks.entrySet())mask=e.getValue().isChecked()?mask|e.getKey():mask&~e.getKey();
                     ArrayList<Integer> bottomUp=new ArrayList<>();for(int i=list.getChildCount()-1;i>=0;i--)bottomUp.add((Integer)list.getChildAt(i).getTag());
                     frames.saveWidgetSettings(current.withMask(mask).withOrder(bottomUp));
+                    if(naviLive.isChecked()!=frames.naviLive())frames.saveNaviLive(naviLive.isChecked());
                 }).create();
         dialog.show();dialog.getWindow().setBackgroundDrawable(theme.background(activity,theme.surface,22,false));
         dialog.getButton(-1).setTextColor(theme.accent);dialog.getButton(-2).setTextColor(theme.accent);
@@ -48,7 +54,7 @@ public final class WidgetSettingsDialog {
     static String label(int flag){
         return switch(flag){
             case WidgetSettings.PHONE->"手机状态";case WidgetSettings.MUSIC->"音乐";case WidgetSettings.TYRES->"胎压";case WidgetSettings.VOLTAGE->"电压";case WidgetSettings.SPEED->"速度";
-            case WidgetSettings.POWER->"功率";case WidgetSettings.NOTIFICATIONS->"通知";case WidgetSettings.VOLUME->"音量";case WidgetSettings.HILL_HOLD_DODGE->"驻车避让";default->"";
+            case WidgetSettings.POWER->"功率";case WidgetSettings.NOTIFICATIONS->"通知";case WidgetSettings.VOLUME->"音量";case WidgetSettings.HILL_HOLD_DODGE->"驻车避让";case WidgetSettings.LAMP->"大灯";default->"";
         };
     }
     private static LinearLayout.LayoutParams rowParams(Activity activity){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=MirrorUi.dp(activity,4);return p;}
@@ -79,6 +85,7 @@ public final class WidgetSettingsDialog {
             case WidgetSettings.POWER->()->WidgetOptionsDialog.power(activity,frames,reference);
             case WidgetSettings.NOTIFICATIONS->()->frames.notificationSettings(activity,theme.dark);
             case WidgetSettings.HILL_HOLD_DODGE->()->WidgetOptionsDialog.hold(activity,frames,reference);
+            case WidgetSettings.LAMP->()->frames.lampSettings(activity,theme.dark);
             default->null;
         };
         if(open!=null)row.addView(small(activity,theme,"设置",v->open.run()),smallParams(activity));

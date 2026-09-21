@@ -10,6 +10,14 @@ public final class PixelPacking {
     }
     /** Opaque top/right background, with every source pixel preserved at bottom-left. */
     public static void compose(ByteBuffer input,int rowStride,int pixelStride,int width,int height,ByteBuffer output,int frameWidth,int frameHeight,int color) {
+        compose(input,rowStride,pixelStride,width,height,output,frameWidth,frameHeight,color,false);
+    }
+    /**
+     * With {@code healEdges} the outermost pixel ring of the app content is replaced by its inner neighbours. A display whose
+     * logical size is scaled into the buffer ("keep phone DPI") gets its last row and column only partly covered by the
+     * scaled content, so SurfaceFlinger blends them with black: a dark hairline, visible against a light background.
+     */
+    public static void compose(ByteBuffer input,int rowStride,int pixelStride,int width,int height,ByteBuffer output,int frameWidth,int frameHeight,int color,boolean healEdges) {
         if(width<1||height<1||frameWidth<width||frameHeight<height||pixelStride<4||rowStride<(long)width*pixelStride
                 ||(long)frameWidth*frameHeight*4>output.capacity())throw new IllegalArgumentException("Invalid canvas layout");
         BandColor.requireOpaque(color);
@@ -25,6 +33,13 @@ public final class PixelPacking {
             for(int x=width;x<frameWidth;x++)output.putInt(packed);
         }
         output.flip();
+        if(healEdges&&width>2&&height>2)healEdges(output,frameWidth,top,width,height);
+    }
+    static void healEdges(ByteBuffer output,int frameWidth,int top,int width,int height){
+        int stride=frameWidth*4;
+        for(int y=0;y<height;y++){int row=(top+y)*stride;output.putInt(row,output.getInt(row+4));output.putInt(row+(width-1)*4,output.getInt(row+(width-2)*4));}
+        int first=top*stride,second=(top+1)*stride,last=(top+height-1)*stride,before=(top+height-2)*stride;
+        for(int x=0;x<width*4;x+=4){output.putInt(first+x,output.getInt(second+x));output.putInt(last+x,output.getInt(before+x));}
     }
     private PixelPacking() {}
 }

@@ -51,6 +51,7 @@ public final class CoreTests {
                         && "android.permission.INTERACT_ACROSS_USERS_FULL".equals(shizuku.getAttribute("android:permission")),
                 "official provider initializes Sui in the broker process with its protected authority");
     }
+    static double luminance(int color){double r=((color>>>16)&255)/255.,g=((color>>>8)&255)/255.,b=(color&255)/255.;return .2126*r+.7152*g+.0722*b;}
     static void canvasLayoutTests() {
         DisplaySettings d=DisplaySettings.defaults();
         check(d.width==848&&d.height==480&&d.virtualWidth==640&&d.virtualHeight==440&&d.contentTop()==40,"calibrated layout reserves the 40px status bar and the right column");
@@ -59,6 +60,26 @@ public final class CoreTests {
         rejects(()->new DisplaySettings(848,480,640,482,160,0xff242424),"oversize app height cannot be cropped");
         rejects(()->new DisplaySettings(848,480,641,440,160,0xff242424),"odd virtual width rejected");
         rejects(()->new DisplaySettings(848,480,640,200,160,0xff242424),"tiny virtual height rejected");
+        DisplaySettings keep=new DisplaySettings(848,480,640,440,160,0xff242424,true),off=new DisplaySettings(848,480,640,440,160,0xff242424,false);
+        check(d.keepPhoneDpi&&DisplaySettings.DEFAULT_KEEP_PHONE_DPI,"keep-phone-DPI is on by default");
+        DisplaySettings.RenderPlan plan=keep.renderPlan(520);
+        check(plan!=null&&plan.width()==2080&&plan.height()==1430&&plan.dpi()==520,"keep-phone-DPI renders 640x440 dp at 2080x1430@520 for a 520 dpi phone");
+        DisplaySettings.RenderPlan odd=keep.renderPlan(420);
+        check(odd.width()==1680&&odd.height()==1156&&odd.dpi()==420,"render sizes round to even");
+        DisplaySettings.RenderPlan capped=new DisplaySettings(848,480,640,440,100,0xff242424,true).renderPlan(700);
+        check(capped.width()==4096&&capped.height()==2816&&capped.dpi()==700,"oversize plans shrink to the 4096 side limit keeping the phone density");
+        check(keep.renderPlan(160)==null&&keep.renderPlan(0)==null&&off.renderPlan(520)==null,"no override when the density already matches, is unknown or the option is off");
+        check(keep.withFrame(636,360).keepPhoneDpi&&!off.withFrame(636,360).keepPhoneDpi&&keep.label().contains("保持手机 DPI")&&!off.label().contains("保持"),"the option survives reframing and shows in the label");
+        check(d.lightBackgroundColor==DisplaySettings.DEFAULT_LIGHT_BACKGROUND_COLOR&&d.background(true)==d.backgroundColor&&d.background(false)==d.lightBackgroundColor&&keep.withFrame(636,360).lightBackgroundColor==d.lightBackgroundColor,"each dashboard theme has its own frame background");
+        rejects(()->new DisplaySettings(848,480,640,440,160,0xff242424,true,0x80ffffff),"transparent light background rejected");
+        dev.ichinomiya.ninebotenhance.core.HudPalette dark=dev.ichinomiya.ninebotenhance.core.HudPalette.DARK,light=dev.ichinomiya.ninebotenhance.core.HudPalette.LIGHT;
+        check(dark.dark()&&!light.dark()&&dev.ichinomiya.ninebotenhance.core.HudPalette.of(true)==dark&&dev.ichinomiya.ninebotenhance.core.HudPalette.of(false)==light,"palettes resolve by theme");
+        for(dev.ichinomiya.ninebotenhance.core.HudPalette pal:new dev.ichinomiya.ninebotenhance.core.HudPalette[]{dark,light}){
+            check((pal.surface()>>>24)>=0xf0&&(pal.text()>>>24)==255&&(pal.label()>>>24)==255&&(pal.icon()>>>24)==255&&(pal.percent()>>>24)==255&&(pal.body()>>>24)==255,"card surface and text colours are opaque");
+            double surface=luminance(pal.surface()),text=luminance(pal.text()),label=luminance(pal.label());
+            check(pal.dark()?text>surface+.5&&label>surface+.2:text<surface-.5&&label<surface-.2,"text stands out from the card surface in "+(pal.dark()?"dark":"light"));
+        }
+        check(Arrays.equals(dev.ichinomiya.ninebotenhance.core.DashboardTheme.payload(true),new byte[]{1,0,1,0})&&Arrays.equals(dev.ichinomiya.ninebotenhance.core.DashboardTheme.payload(false),new byte[]{1,0,0,0}),"day/night flag is mask 1 plus the value, little endian");
         for(boolean rotate:new boolean[]{false,true})for(int[] view:new int[][]{{360,740},{360,320},{1200,540}}){
             PreviewTransform m=new PreviewTransform(d,view[0],view[1],rotate);
             for(float[] point:new float[][]{{.5f,.5f},{639.5f,.5f},{.5f,439.5f},{639.5f,439.5f},{320,220}}){
@@ -100,6 +121,14 @@ public final class CoreTests {
         VehicleStartTests.run();
         BandColorTests.run();
         EncodingTests.run();
+        OverlayTests.run();
+        DashboardLayoutTests.run();
+        HiddenFeatureTests.run();
+        NaviTestTests.run();
+        EventCensusTests.run();
+        NaviLiveTests.run();
+        NaviResumeTests.run();
+        LampTests.run();
         FramePacerTests.run();
         themeTests();
         componentContractTests();
@@ -195,6 +224,7 @@ public final class CoreTests {
         check(!CallerPolicy.allowed(20001,20002,new String[]{"com.example.other"}), "unrelated app denied");
         check(CallerPolicy.allowed(20001,20002,new String[]{"cn.ninebot.ninebot"}), "intended target allowed");
         check(CallerPolicy.allowed(20002,20002,null), "own application allowed");
+        check(!CallerPolicy.allowed(20001,20002,new String[]{"com.autonavi.minimap"})&&CallerPolicy.allowedFor(Protocol.NAVI_UPDATE,20001,20002,new String[]{"com.autonavi.minimap"})&&CallerPolicy.allowedFor(Protocol.REPORT,20001,20002,new String[]{"com.baidu.BaiduMap"})&&!CallerPolicy.allowedFor(Protocol.BEGIN,20001,20002,new String[]{"com.tencent.map"})&&!CallerPolicy.allowedFor(Protocol.NAVI_UPDATE,20001,20002,new String[]{"com.example.other"}), "navigation apps may only report and publish navigation state");
         // Hooks must remain out of authentication, transport and vehicle command implementations.
         check(HookPolicy.captureClass("cn.ninebot.capture.codec.BitmapToH264Encoder"), "image encoder eligible");
         check(!HookPolicy.captureClass("cn.ninebot.nbcrypto.NbEncryption"), "crypto excluded");
@@ -316,6 +346,9 @@ public final class CoreTests {
         check(report.total() == 8 && report.missing().equals(java.util.List.of("String#getBytes(byte[])", "String#nope(…)", "Missing", "id:ivCruise")), "the catalog reports exactly the missing classes, methods and resources: " + report.missing());
         check(report.text().startsWith("Hook 目标 4/8 可用，缺失：") && HookCatalog.verify(catalog.subList(0, 3), name -> { try { return Class.forName(name); } catch (ClassNotFoundException e) { return null; } }, t -> 1).text().equals("Hook 目标 3/3 可用"), "the report text counts available targets");
         check(HookCatalog.ALL.size() >= 20 && HookCatalog.ALL.stream().anyMatch(t -> t.owner().equals(HookCatalog.DEVICE) && t.member().equals("sendCommand")), "the catalog covers the vehicle read path");
+        check(HookCatalog.compatible("6.10.10", 610104038L) && HookCatalog.compatible("6.10.11", 610114116L) && !HookCatalog.compatible("6.10.11", 610104038L)
+                && !HookCatalog.compatible("6.10.12", 610114116L) && !HookCatalog.compatible(null, 610114116L) && HookCatalog.versions().equals("6.10.10 / 6.10.11"),
+                "the version gate admits exactly the verified builds by name and code");
         RegisterProbe probe = new RegisterProbe();
         java.util.function.Function<String, RegisterProbe.Value> value = name -> probe.snapshot(RegisterProbe.all()).stream().filter(r -> r.name().equals(name)).findFirst().get().value();
         probe.sent("rWarn", 1000); var rows = probe.snapshot(java.util.List.of("rSpeed", "rWarn"));

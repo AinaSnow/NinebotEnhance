@@ -142,6 +142,12 @@ public final class EncodingDiagnostics {
         }
         return null;
     }
+    /** Target frame rate of the first live codec's accepted configuration, null when unknown. */
+    public synchronized Double targetFps() {
+        if (active() == null) return null;
+        for (Codec codec : current.codecs) if (!codec.retired && codec.requested != null && codec.requested.fps() != null) return codec.requested.fps();
+        return null;
+    }
     public synchronized String summary() {
         if(current==null)return "尚未开始投屏";
         if(!current.vehicle)return "本地模拟，没有车辆编码会话";

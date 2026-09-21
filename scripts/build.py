@@ -108,11 +108,13 @@ def main():
         assert f"package: name='{PACKAGE}'" in badging and f"versionCode='{code}'" in badging and f"versionName='{name}'" in badging
         assert "application-label:'Ninebot Enhance'" in badging and 'launchable-activity:' not in badging
         manifest=run([tool(bt,'aapt2'),'dump','xmltree',apk,'--file','AndroidManifest.xml'],records)
-        assert len(re.findall(r'^\s*E: activity\s',manifest,re.MULTILINE)) == 3
+        assert len(re.findall(r'^\s*E: activity\s',manifest,re.MULTILINE)) == 4
         assert '.ui.LaunchAppPickerActivity' in manifest
         assert '.ui.NotificationSettingsActivity' in manifest and '.notification.MirrorNotificationListener' in manifest
         assert 'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE' in manifest
         assert '.ui.ScreenCaptureConsentActivity' in manifest and '.service.ScreenCaptureService' in manifest
+        assert '.ui.LampSettingsActivity' in manifest
+        assert 'android.permission.BLUETOOTH_CONNECT' in manifest and 'android.permission.BLUETOOTH_SCAN' in manifest
         assert 'android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION' in manifest
         assert 'rikka.shizuku.ShizukuProvider' in manifest and 'android.permission.INTERACT_ACROSS_USERS_FULL' in manifest
         with zipfile.ZipFile(apk) as archive:
@@ -122,10 +124,10 @@ def main():
             assert archive.read('META-INF/licenses/NinebotEnhance-Apache-2.0.txt') == (ROOT/'LICENSE').read_bytes(), 'Project license mismatch'
             assert archive.read('META-INF/NOTICE.txt') == (ROOT/'app/src/main/resources/META-INF/NOTICE.txt').read_bytes(), 'Gradle/offline notices differ'
             assert archive.read('META-INF/xposed/java_init.list').strip()==(PACKAGE+'.hook.MirrorModule').encode()
-            assert archive.read('META-INF/xposed/scope.list').strip()==b'cn.ninebot.ninebot'
+            assert archive.read('META-INF/xposed/scope.list').split()==[b'cn.ninebot.ninebot',b'com.autonavi.minimap',b'com.tencent.map',b'com.baidu.BaiduMap']
             assert b'staticScope=true' in archive.read('META-INF/xposed/module.prop').splitlines()
             definitions=set().union(*(defined_classes(archive.read(n)) for n in archive.namelist() if re.fullmatch(r'classes\d*\.dex',n)))
-            for required in ['hook/MirrorModule','service/FrameBridgeService','service/RootBridgeProvider','display/RootDisplayMain','privilege/PrivilegeManager','privilege/PrivilegedLauncher','privilege/RootAuthorization','core/AuthorizedShell','core/StartPermission','core/FramePacer','diagnostics/StreamStats','hook/StatisticsHooks','ui/StatisticsDialog','hook/EncodingHooks','diagnostics/EncodingDiagnostics','diagnostics/EncodingFormat','diagnostics/CaptureConfigReader','diagnostics/WeakIdentityMap']:
+            for required in ['hook/MirrorModule','service/FrameBridgeService','service/RootBridgeProvider','display/RootDisplayMain','privilege/PrivilegeManager','privilege/PrivilegedLauncher','privilege/RootAuthorization','core/AuthorizedShell','core/StartPermission','core/FramePacer','diagnostics/StreamStats','hook/StatisticsHooks','ui/StatisticsDialog','hook/EncodingHooks','diagnostics/EncodingDiagnostics','diagnostics/EncodingFormat','diagnostics/CaptureConfigReader','diagnostics/WeakIdentityMap','lamp/LampController','ui/LampSettingsActivity','core/TxLampProtocol']:
                 assert 'L'+PACKAGE.replace('.','/')+'/'+required+';' in definitions,required
             for required in ['Lrikka/shizuku/Shizuku;','Lrikka/sui/Sui;','Lrikka/shizuku/ShizukuProvider;']:assert required in definitions
             for required in ['core/CaptureSize','core/ProjectionGrant','service/ProjectionSession','service/ScreenCaptureService','ui/ScreenCaptureConsentActivity','ui/RecordingPanel']:

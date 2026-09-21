@@ -26,7 +26,7 @@ public final class FrameBridgeService extends Service {
             if (code == INTERFACE_TRANSACTION) { reply.writeString(Protocol.DESCRIPTOR); return true; }
             data.enforceInterface(Protocol.DESCRIPTOR);
             int uid = Binder.getCallingUid();
-            if (!CallerPolicy.allowed(uid, android.os.Process.myUid(), getPackageManager().getPackagesForUid(uid)))
+            if (!CallerPolicy.allowedFor(code, uid, android.os.Process.myUid(), getPackageManager().getPackagesForUid(uid)))
                 throw new SecurityException("仅允许九号与模块访问");
             Bundle args = data.readBundle(getClassLoader()); if (args == null) args = new Bundle();
             // Queries use this module's MAIN/LAUNCHER visibility declaration, not the calling Ninebot UID.
@@ -64,6 +64,14 @@ public final class FrameBridgeService extends Service {
                     result.putParcelable("settings_intent", android.app.PendingIntent.getActivity(FrameBridgeService.this, 801, settingsIntent,
                             android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT, options.toBundle()));
                     break;
+                case Protocol.LAMP_SETTINGS: {
+                    android.app.ActivityOptions lampOptions = android.app.ActivityOptions.makeBasic();
+                    if (Build.VERSION.SDK_INT >= 35) lampOptions.setPendingIntentCreatorBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                    Intent lampIntent = new Intent(FrameBridgeService.this, dev.ichinomiya.ninebotenhance.ui.LampSettingsActivity.class).putExtra("dark", args.getBoolean("dark", true));
+                    result.putParcelable("lamp_intent", android.app.PendingIntent.getActivity(FrameBridgeService.this, 803, lampIntent,
+                            android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT, lampOptions.toBundle()));
+                    break;
+                }
                 case Protocol.LAUNCH_APP_PICKER: {
                     android.app.ActivityOptions pickerOptions = android.app.ActivityOptions.makeBasic();
                     if (Build.VERSION.SDK_INT >= 35) pickerOptions.setPendingIntentCreatorBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
@@ -123,6 +131,8 @@ public final class FrameBridgeService extends Service {
                         result.putParcelableArrayList(AppCatalog.APPS, AppCatalog.choices(getPackageManager()));
                     break;
                 case Protocol.REPORT: Diagnostics.add(args.getString("message", "")); break;
+                case Protocol.NAVI_UPDATE: dev.ichinomiya.ninebotenhance.navi.NaviHub.get().publish(args); break;
+                case Protocol.NAVI_SNAPSHOT: result = dev.ichinomiya.ninebotenhance.navi.NaviHub.get().snapshot(); break;
                 case Protocol.APP_ICON:
                     try { result.putParcelable("icon", AppCatalog.icon(getPackageManager(), args.getString(AppCatalog.SELECTED))); }
                     catch (Exception e) { result.putString("error", Ipc.error(e)); }
@@ -163,6 +173,7 @@ public final class FrameBridgeService extends Service {
     };
     @Override public void onCreate() {
         super.onCreate(); PrivilegeManager.initialize(this);
+        dev.ichinomiya.ninebotenhance.navi.NaviLoopbackServer.start();
         Diagnostics.add("SERVICE created pid=" + android.os.Process.myPid());
     }
     @Override public IBinder onBind(Intent intent) { Diagnostics.add("SERVICE bound"); RootSession.get(this); return binder; }

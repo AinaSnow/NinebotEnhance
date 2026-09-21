@@ -36,7 +36,13 @@ public final class AboutDialog {
         probeRow.addView(probeSettings, new LinearLayout.LayoutParams(MirrorUi.dp(activity, 72), MirrorUi.dp(activity, 32)));
         probeRow.setVisibility(frames.debugModeUnlocked() ? View.VISIBLE : View.GONE); content.addView(probeRow, debugParams);
         probe.setOnCheckedChangeListener((button, checked) -> { frames.saveWidgetSettings(frames.widgetSettings().with(dev.ichinomiya.ninebotenhance.core.WidgetSettings.REGISTER_PROBE, checked)); frames.report("DEBUG register probe " + checked); });
-        version.setOnClickListener(v -> { if (frames.debugVersionTap()) { debug.setVisibility(View.VISIBLE); probeRow.setVisibility(View.VISIBLE); } });
+        // Dashboard navigation test: the module's only vehicle write path (command 113 display data), scripted route while a vehicle session runs.
+        CheckBox naviTest = new CheckBox(activity); naviTest.setText("巡航导航测试数据"); naviTest.setTextSize(15); naviTest.setTextColor(theme.text);
+        naviTest.setButtonTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{theme.accent, theme.secondary}));
+        naviTest.setChecked(frames.naviTest()); naviTest.setMinHeight(MirrorUi.dp(activity, 48));
+        naviTest.setVisibility(frames.debugModeUnlocked() ? View.VISIBLE : View.GONE); content.addView(naviTest, debugParams);
+        naviTest.setOnCheckedChangeListener((button, checked) -> frames.saveNaviTest(checked));
+        version.setOnClickListener(v -> { if (frames.debugVersionTap()) { debug.setVisibility(View.VISIBLE); probeRow.setVisibility(View.VISIBLE); naviTest.setVisibility(View.VISIBLE); } });
         content.addView(DialogContent.text(activity, theme, "为九号出行添加应用投屏、系统录屏、虚拟屏预览与输入、会话统计。", 15));
         TextView copyright = DialogContent.text(activity, theme, "Copyright 2026 Ninebot Enhance contributors\nApache License 2.0\n本项目不是九号官方产品。", 13);
         copyright.setTextColor(theme.secondary); content.addView(copyright);

@@ -8,23 +8,27 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
                              List<Integer> order,Map<Integer,WidgetCondition> conditions) {
     public static final int PHONE=1,TYRES=2,MUSIC=4,NOTIFICATIONS=16,TYRE_FRONT=32,TYRE_REAR=64,VOLTAGE=128,TYRE_READ=256,
             VOLTAGE_READ=512,VOLTAGE_CHART=1024,MUSIC_AUTO_HIDE=2048,VOLUME=4096,REGISTER_PROBE=8192,HILL_HOLD_DODGE=16384,
-            SPEED=32768,POWER=65536,SPEED_CHART=131072,POWER_CHART=262144;
+            SPEED=32768,POWER=65536,SPEED_CHART=131072,POWER_CHART=262144,LAMP=524288;
     public static final int ALL=PHONE|TYRES|MUSIC|NOTIFICATIONS|TYRE_FRONT|TYRE_REAR|VOLTAGE|TYRE_READ|VOLTAGE_READ|VOLTAGE_CHART|MUSIC_AUTO_HIDE|VOLUME|REGISTER_PROBE|HILL_HOLD_DODGE
-            |SPEED|POWER|SPEED_CHART|POWER_CHART;
+            |SPEED|POWER|SPEED_CHART|POWER_CHART|LAMP;
     /** Switches introduced by later preference versions; masks saved by older builds get them switched on once. */
     public static final int ADDED_IN_V2=VOLTAGE_READ|VOLTAGE_CHART|MUSIC_AUTO_HIDE|VOLUME,ADDED_IN_V3=HILL_HOLD_DODGE,ADDED_IN_V4=SPEED_CHART|POWER_CHART;
-    /** Version 5 changed the hill-hold minimum time semantics (it now gates the release too) and reset its default; older saves take the new default. */
-    public static final int PREFERENCE_VERSION=5;
-    /** Switches that are off in a fresh install: the diagnostic probe and the two optional ride cards. */
-    public static final int OFF_BY_DEFAULT=REGISTER_PROBE|SPEED|POWER;
+    /**
+     * Version 5 changed the hill-hold minimum time semantics (it now gates the release too) and reset its default; older saves
+     * take the new default. Version 6 added the lamp card, which older saves must not inherit: without a bound lamp it would
+     * only ever read "未连接".
+     */
+    public static final int PREFERENCE_VERSION=6;
+    /** Switches that are off in a fresh install: the diagnostic probe, the two optional ride cards and the lamp. */
+    public static final int OFF_BY_DEFAULT=REGISTER_PROBE|SPEED|POWER|LAMP;
     /** Marker inside the order: entries before it form the right column (bottom up), entries after it the left column (bottom up). */
     public static final int COLUMN_DIVIDER=0;
     /** Cards of the two columns; the notification block is one of them and always belongs to the right column. */
-    public static final List<Integer> CARDS=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER);
+    public static final List<Integer> CARDS=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP);
     /** Default: everything in the right column, bottom up, and an empty left column. */
-    public static final List<Integer> DEFAULT_ORDER=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,COLUMN_DIVIDER);
+    public static final List<Integer> DEFAULT_ORDER=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP,COLUMN_DIVIDER);
     /** Widgets that accept a display condition, in the index order the renderer uses for its timers. */
-    public static final int[] CONDITIONAL={PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,NOTIFICATIONS,VOLUME};
+    public static final int[] CONDITIONAL={PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,NOTIFICATIONS,VOLUME,LAMP};
     public static final int MIN_TYRE_SECONDS=5,MAX_TYRE_SECONDS=60,DEFAULT_TYRE_SECONDS=30;
     /** Voltage, speed and power are read at sub-second intervals; sliders move in READ_STEP_MS steps. */
     public static final int MIN_READ_MS=500,MAX_READ_MS=15000,DEFAULT_READ_MS=1000,READ_STEP_MS=500;
@@ -87,6 +91,7 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
                                          int speedMs,int powerMs,int holdPowerMax,int holdSeconds,int speedChartSeconds,int powerChartSeconds,List<Integer> order,Map<Integer,WidgetCondition> conditions){
         int upgraded=mask;if(version<2)upgraded|=ADDED_IN_V2;if(version<3)upgraded|=ADDED_IN_V3;if(version<4)upgraded|=ADDED_IN_V4;
         if(version<5)holdSeconds=DEFAULT_HOLD_SECONDS;
+        if(version<6)upgraded&=~LAMP;
         return new WidgetSettings(upgraded,tyreSeconds,voltageMs,musicHideSeconds,chartSeconds,holdPowerMin,holdSpeedMax,speedMs,powerMs,holdPowerMax,holdSeconds,speedChartSeconds,powerChartSeconds,order,conditions);
     }
     public boolean enabled(int widget){return (mask&widget)!=0;}

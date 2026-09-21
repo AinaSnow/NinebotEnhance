@@ -18,6 +18,8 @@ import dev.ichinomiya.ninebotenhance.core.WidgetSettings;
 import dev.ichinomiya.ninebotenhance.core.WidgetCondition;
 import dev.ichinomiya.ninebotenhance.core.RegisterProbe;
 import dev.ichinomiya.ninebotenhance.core.RideState;
+import dev.ichinomiya.ninebotenhance.core.NaviUpdate;
+import dev.ichinomiya.ninebotenhance.navi.NaviUpdates;
 import dev.ichinomiya.ninebotenhance.diagnostics.Diagnostics;
 import dev.ichinomiya.ninebotenhance.diagnostics.LogDigest;
 import dev.ichinomiya.ninebotenhance.ipc.Ipc;
@@ -42,6 +44,10 @@ import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import dev.ichinomiya.ninebotenhance.diagnostics.StreamStats;
+import dev.ichinomiya.ninebotenhance.diagnostics.StreamOverlay;
+import dev.ichinomiya.ninebotenhance.core.EncoderOverride;
+import dev.ichinomiya.ninebotenhance.core.DashboardLayout;
+import dev.ichinomiya.ninebotenhance.core.HiddenFeatures;
 import dev.ichinomiya.ninebotenhance.diagnostics.EncodingDiagnostics;
 
 /** Ninebot owns the consumer Surface: compositor -> RGBA -> original encoder. No JPEG IPC. */
@@ -58,6 +64,7 @@ public final class FrameClient {
     private final Object frameLock = new Object();
     private final ArrayDeque<String> reports = new ArrayDeque<>();
     private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+    private final Paint overlayText = new Paint(Paint.ANTI_ALIAS_FLAG), overlayBack = new Paint();
     private record FrameStamp(int picture, long hud) {}
     private final Map<Bitmap, FrameStamp> supplied = new WeakHashMap<>();
     private final dev.ichinomiya.ninebotenhance.notification.DashboardHud hud = new dev.ichinomiya.ninebotenhance.notification.DashboardHud();
@@ -65,8 +72,25 @@ public final class FrameClient {
     private final BatteryTelemetry battery = new BatteryTelemetry();
     private volatile java.util.function.BiConsumer<String, WidgetSettings> vehiclePulse = (vehicle, settings) -> {};
     private volatile Runnable vehicleStop = () -> {};
+    /** Dashboard navigation test: scripted command-113 writes while a vehicle session runs, only when the user switch is on. */
+    private volatile java.util.function.Consumer<String> naviTestPulse = vehicle -> {};
+    private volatile Runnable naviTestStop = () -> {};
+    private volatile boolean naviTest;
+    /** Live turn-by-turn state relayed from a phone navigation app through the module service; polled once a second during a session. */
+    private volatile java.util.function.BiConsumer<String, NaviUpdate> naviLivePulse = (vehicle, update) -> {};
+    private volatile boolean naviLive = true;
+    /** Dashboard theme chosen in the preview toolbar: the TFT day/night flag, the palette of the module's cards and the frame background. */
+    private volatile boolean dashboardDark = true;
+    private volatile java.util.function.BiConsumer<String, Boolean> themeSender = (vehicle, dark) -> {};
+    private volatile NaviUpdate liveNavi;
+    private volatile long liveNaviPolled, liveNaviLogged;
     private volatile java.util.function.Supplier<String> vehicleReadSummary = () -> "inactive";
     private volatile WidgetSettings widgets=WidgetSettings.DEFAULT;
+    private volatile EncoderOverride encoderOverride=EncoderOverride.NONE;
+    private volatile HiddenFeatures hiddenFeatures=HiddenFeatures.NONE;
+    private volatile DashboardLayout dashboardLayout=DashboardLayout.DEFAULT;
+    private volatile String layoutVehicle="";
+    private volatile java.util.function.Consumer<EncoderOverride> overrideApplier=o->{};
     private volatile String compatibility="";
     private final RideState ride=new RideState();
     private final RegisterProbe probe=new RegisterProbe();private volatile java.util.Set<String> probeSelection=RegisterProbe.all();private volatile java.util.Set<String> probeRawModules=new java.util.LinkedHashSet<>();
@@ -128,6 +152,11 @@ public final class FrameClient {
                 SharedPreferences saved=context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE);
                 widgets=WidgetSettings.migrate(saved.getInt("version",1),saved.getInt("mask",WidgetSettings.ALL),saved.getInt("tyre_interval",WidgetSettings.DEFAULT_TYRE_SECONDS),saved.getInt("voltage_interval_ms",saved.getInt("voltage_interval",1)*1000),saved.getInt("music_hide",WidgetSettings.DEFAULT_MUSIC_HIDE_SECONDS),saved.getInt("chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),saved.getInt("hold_power",WidgetSettings.DEFAULT_HOLD_POWER),saved.getInt("hold_speed",WidgetSettings.DEFAULT_HOLD_SPEED),saved.getInt("speed_interval_ms",saved.getInt("speed_interval",1)*1000),saved.getInt("power_interval_ms",saved.getInt("power_interval",1)*1000),saved.getInt("hold_power_max",WidgetSettings.DEFAULT_HOLD_POWER_MAX),saved.getInt("hold_seconds",WidgetSettings.DEFAULT_HOLD_SECONDS),saved.getInt("speed_chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),saved.getInt("power_chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),WidgetSettings.parseOrder(saved.getString("widget_order","")),loadConditions(saved));
                 hud.setWidgets(widgets);
+                encoderOverride=new EncoderOverride(saved.getInt("encoder_bitrate_kbps",0),saved.getInt("encoder_fps",0),saved.getBoolean("preview_stats",false));
+                hiddenFeatures=new HiddenFeatures(saved.getBoolean("unhide_throttle",false),saved.getBoolean("unhide_hardkey",false),saved.getBoolean("unhide_cruise",false));
+                naviTest=saved.getBoolean("navi_test",false);
+                naviLive=saved.getBoolean("navi_live",true);
+                dashboardDark=saved.getBoolean("dashboard_dark",true);hud.setDark(dashboardDark);
                 java.util.Set<String> chosen=saved.getStringSet("probe_registers",null); if(chosen!=null) probeSelection=new java.util.LinkedHashSet<>(chosen);
                 java.util.Set<String> raw=saved.getStringSet("probe_raw_modules",null); if(raw!=null) probeRawModules=new java.util.LinkedHashSet<>(raw);
             }
@@ -139,14 +168,88 @@ public final class FrameClient {
     public TireTelemetry tireData() { return tires; }
     public BatteryTelemetry batteryData() { return battery; }
     /** Both observers follow the same selected vehicle; a cast pins it until the session ends. */
-    public void selectVehicle(String key) { tires.select(key); battery.select(key); }
+    public void selectVehicle(String key) { tires.select(key); battery.select(key); metadataWorker.post(() -> loadDashboardLayout(key)); }
+    /** Frame size and dashboard occlusions from the selected vehicle's cached cast configuration; the calibrated default until one is read. */
+    public DashboardLayout dashboardLayout() { return dashboardLayout; }
+    public int frameWidth() { return dashboardLayout.frameWidth(); }
+    public int frameHeight() { return dashboardLayout.frameHeight(); }
+    /** Ninebot caches the TFT board's configuration as {@code <SN>_screen_cast_config.nb} in its external files directory; read-only here. */
+    private void loadDashboardLayout(String vehicle) {
+        if (context == null || vehicle == null || vehicle.isEmpty()) return;
+        try {
+            java.io.File file = new java.io.File(context.getExternalFilesDir(null), vehicle + "_screen_cast_config.nb");
+            if (!file.isFile() || file.length() > 262144) { if (!vehicle.equals(layoutVehicle)) report("LAYOUT no cached cast configuration for the selected vehicle; calibrated default"); layoutVehicle = vehicle; return; }
+            String text = new String(java.nio.file.Files.readAllBytes(file.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            DashboardLayout parsed = DashboardLayout.parse(text);
+            boolean changed = !parsed.equals(dashboardLayout) || !vehicle.equals(layoutVehicle);
+            dashboardLayout = parsed; layoutVehicle = vehicle; hud.setOcclusions(parsed.referenceOcclusions());
+            if (changed) { report("LAYOUT " + parsed.describe()); View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation(); }
+        } catch (RuntimeException | java.io.IOException e) { report("LAYOUT unusable cast configuration " + Ipc.error(e instanceof RuntimeException ? (RuntimeException) e : new IllegalStateException(e))); }
+    }
     /** Installed by the hook layer: pulse while a vehicle session may read, stop resets the read schedule. */
     public void setVehicleReader(java.util.function.BiConsumer<String, WidgetSettings> pulse, Runnable stop, java.util.function.Supplier<String> summary) { vehiclePulse = pulse; vehicleStop = stop; vehicleReadSummary = summary; }
+    public void setNaviTest(java.util.function.Consumer<String> pulse, Runnable stop) { naviTestPulse = pulse; naviTestStop = stop; }
+    public boolean naviTest(){return naviTest;}
+    public void setNaviLive(java.util.function.BiConsumer<String, NaviUpdate> pulse) { naviLivePulse = pulse; }
+    /** Installed by the hook layer: (vehicle, dark) once per pulse during a vehicle session, null dark when the session ends. */
+    public void setThemeSender(java.util.function.BiConsumer<String, Boolean> sender) { themeSender = sender; }
+    public boolean naviLive(){return naviLive;}
+    public NaviUpdate liveNavi(){NaviUpdate u=liveNavi;return u!=null&&u.fresh(SystemClock.elapsedRealtime())?u:null;}
+    public void saveNaviLive(boolean value){
+        naviLive=value;
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean("navi_live",value).apply();
+        report("NAVI live switch "+(value?"on":"off"));
+    }
+    public void saveNaviTest(boolean value){
+        naviTest=value;
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean("navi_test",value).apply();
+        report("NAVITEST switch "+(value?"on":"off"));
+    }
     /** Preview helper: one synthetic notification card rendered locally, independent of the phone mailbox. */
     private int marks;
     /** Also a timestamp marker for register probing: tap it right after each action on the vehicle and read the MARK lines back in the log. */
     public void simulateNotification() { hud.simulate(SystemClock.elapsedRealtime()); report("MARK " + (++marks)); View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation(); }
     public WidgetSettings widgetSettings(){return widgets;}
+    public boolean dashboardDark(){return dashboardDark;}
+    public void toggleDashboardTheme(){
+        boolean dark=!dashboardDark;dashboardDark=dark;hud.setDark(dark);
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean("dashboard_dark",dark).apply();
+        report("THEME "+(dark?"dark":"light"));
+        if(mode==DirectSession.Mode.VEHICLE)themeSender.accept(battery.selectedKey(),dark);
+        View preview=inlinePreview.get();if(preview!=null)preview.postInvalidateOnAnimation();
+    }
+    /** Forced encoder bitrate / frame rate and the preview statistics switch; applied by the encoding hooks. */
+    public EncoderOverride encoderOverride(){return encoderOverride;}
+    /** Ninebot settings entries forced visible by the feature hooks. */
+    public HiddenFeatures hiddenFeatures(){return hiddenFeatures;}
+    public void saveHiddenFeatures(HiddenFeatures value){
+        hiddenFeatures=value;
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean("unhide_throttle",value.throttle()).putBoolean("unhide_hardkey",value.hardkey()).putBoolean("unhide_cruise",value.cruise()).apply();
+        report("FEATURE saved "+value.describe());
+        main.post(dynamicPageListener);
+    }
+    /** Ninebot's vehicle-page view factory as observed by the feature hooks: the companion object, its generateView method and the page's device identity. */
+    public record DynamicViewFactory(Object factory,java.lang.reflect.Method generate,int deviceId,String deviceTag){
+        public View create(android.view.ViewGroup parent,String type,String json)throws ReflectiveOperationException{return (View)generate.invoke(factory,parent,type,json,deviceId,deviceTag);}
+    }
+    private volatile DynamicViewFactory dynamicViewFactory;
+    private volatile Runnable dynamicPageListener=()->{};
+    public DynamicViewFactory dynamicViewFactory(){return dynamicViewFactory;}
+    public void setDynamicPageListener(Runnable listener){dynamicPageListener=listener==null?()->{}:listener;}
+    public void dynamicViewFactory(DynamicViewFactory value){
+        DynamicViewFactory previous=dynamicViewFactory;dynamicViewFactory=value;
+        if(previous==null||previous.deviceId()!=value.deviceId()||!previous.deviceTag().equals(value.deviceTag())){report("FEATURE page factory deviceId="+value.deviceId());main.post(dynamicPageListener);}
+    }
+    public void setEncoderOverrideApplier(java.util.function.Consumer<EncoderOverride> applier){overrideApplier=applier;}
+    public void saveEncoderOverride(EncoderOverride value){
+        encoderOverride=value;
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putInt("encoder_bitrate_kbps",value.bitrateKbps()).putInt("encoder_fps",value.fps()).putBoolean("preview_stats",value.previewStats()).apply();
+        report("OVERRIDE saved "+value.describe());
+        try{overrideApplier.accept(value);}catch(RuntimeException e){report("OVERRIDE apply "+Ipc.error(e));}
+        View preview=inlinePreview.get();if(preview!=null)preview.postInvalidateOnAnimation();
+    }
+    /** Target frame rate shown on the preview: the override when set, otherwise the accepted encoder configuration. */
+    public Double targetFps(){EncoderOverride o=encoderOverride;return o.overridesFps()?Double.valueOf(o.fps()):encoding.targetFps();}
     /** Speed and motor power polled by the vehicle hooks; the HUD infers hill hold from them. */
     public RideState rideData(){return ride;}
     /** Debug register probe: the value table drawn by the HUD and the registers the vehicle hooks poll. */
@@ -212,7 +315,9 @@ public final class FrameClient {
                         throw new IllegalArgumentException("录屏模式只用于车辆投屏");
                     if (!screenCapture && selected.isEmpty()) throw new IllegalArgumentException("请先在设置中选择启动应用并保存");
                     if (completed.get() || !request.equals(ownerRequest)) return;
-                    settings = value; cacheSettings(value, selected); closeFrames();
+                    loadDashboardLayout(battery.selectedKey());
+                    settings = value.withFrame(frameWidth(), frameHeight()); cacheSettings(value, selected); closeFrames();
+                    if (settings != value) report("LAYOUT frame " + settings.width + "x" + settings.height + " from the cast configuration");
                     int width = settings.virtualWidth, height = settings.virtualHeight;
                     if (screenCapture) {
                         Rect bounds = activity.getSystemService(android.view.WindowManager.class).getMaximumWindowMetrics().getBounds();
@@ -279,7 +384,7 @@ public final class FrameClient {
             Image.Plane plane = image.getPlanes()[0];
             int width=source.getWidth(),height=source.getHeight();
             int frameWidth=screenCapture?width:settings.width,frameHeight=screenCapture?height:settings.height;
-            PixelPacking.compose(plane.getBuffer(),plane.getRowStride(),plane.getPixelStride(),width,height,packed,frameWidth,frameHeight,settings.backgroundColor);
+            PixelPacking.compose(plane.getBuffer(),plane.getRowStride(),plane.getPixelStride(),width,height,packed,frameWidth,frameHeight,settings.background(dashboardDark),!screenCapture&&settings.keepPhoneDpi);
             Bitmap bitmap = Bitmap.createBitmap(frameWidth,frameHeight,Bitmap.Config.ARGB_8888);
             bitmap.copyPixelsFromBuffer(packed); bitmap.setDensity(Bitmap.DENSITY_NONE);
             if(lastImage==0)report("RGBA first frame "+frameWidth+"x"+frameHeight+" content="+width+"x"+height+" position=0,"+(frameHeight-height)+" source="+(screenCapture?"MediaProjection":"VirtualDisplay"));
@@ -314,11 +419,25 @@ public final class FrameClient {
             hud.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), SystemClock.elapsedRealtime());
             // The local simulation shows, on top of everything, what the vehicle dashboard itself paints over the frame.
             DirectSession.Mode current = mode;
-            if (current != null && current != DirectSession.Mode.VEHICLE) dev.ichinomiya.ninebotenhance.notification.DashboardOcclusion.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), hud.hillHold(SystemClock.elapsedRealtime()));
+            if (current != null && current != DirectSession.Mode.VEHICLE) dev.ichinomiya.ninebotenhance.notification.DashboardOcclusion.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), hud.hillHold(SystemClock.elapsedRealtime()), hud.occlusions());
             canvas.restoreToCount(overlaySave);
+            if (encoderOverride.previewStats()) drawStatistics(canvas, r[0], r[1]);
         }
         canvas.restoreToCount(save);
         // A phone repaint is not an encoder capture: do not advance replacement counters.
+    }
+    /** Phone-only statistics panel at the top-left of the picture; drawn after the HUD so it never enters an encoded frame. */
+    private void drawStatistics(Canvas canvas, float left, float top) {
+        DirectSession.Mode current = mode;
+        java.util.List<String> lines = StreamOverlay.lines(statistics(), targetFps(), current == DirectSession.Mode.VEHICLE);
+        float density = context == null ? 2.5f : context.getResources().getDisplayMetrics().density;
+        overlayText.setColor(Color.WHITE); overlayText.setTextSize(11 * density); overlayBack.setColor(0xA0000000);
+        float pad = 5 * density, lineHeight = overlayText.getFontSpacing(), width = 0;
+        for (String line : lines) width = Math.max(width, overlayText.measureText(line));
+        float x = left + 4 * density, y = top + 4 * density;
+        canvas.drawRoundRect(new RectF(x, y, x + width + pad * 2, y + lineHeight * lines.size() + pad * 2), 4 * density, 4 * density, overlayBack);
+        float baseline = y + pad - overlayText.ascent();
+        for (String line : lines) { canvas.drawText(line, x + pad, baseline, overlayText); baseline += lineHeight; }
     }
     public void back(String request) { control(request, Protocol.UI_BACK, null); }
     public boolean screenCapture() { return screenCapture; }
@@ -436,7 +555,14 @@ public final class FrameClient {
                 // Local simulation reads too when the vehicle happens to be connected, so reads can be checked without casting.
                 if (mode != null && (current.readsTyres() || current.readsVoltage() || current.readsSpeed() || current.readsPower() || current.enabled(WidgetSettings.REGISTER_PROBE))) vehiclePulse.accept(battery.selectedKey(), current);
                 else vehicleStop.run();
-            } else vehicleStop.run();
+                if (mode == DirectSession.Mode.VEHICLE) themeSender.accept(battery.selectedKey(), dashboardDark);
+                if (mode == DirectSession.Mode.VEHICLE && naviTest) naviTestPulse.accept(battery.selectedKey());
+                else {
+                    NaviUpdate live = liveNavi;
+                    if (mode == DirectSession.Mode.VEHICLE && naviLive && live != null && live.fresh(SystemClock.elapsedRealtime())) naviLivePulse.accept(battery.selectedKey(), live);
+                    else naviTestStop.run();
+                }
+            } else { vehicleStop.run(); naviTestStop.run(); }
             View preview = inlinePreview.get();
             if (preview != null && active && !debugMode.enabled()) preview.postInvalidateOnAnimation();
             worker.postDelayed(this, active ? 50 : 1000);
@@ -450,6 +576,13 @@ public final class FrameClient {
                     Bundle args = Ipc.request(request); hud.request(args);
                     Bundle result = bridge.call(Protocol.HUD_SNAPSHOT, args);
                     hud.accept(request, result.getBundle("hud"), SystemClock.elapsedRealtime());
+                    long now = SystemClock.elapsedRealtime();
+                    if (naviLive && now - liveNaviPolled >= 1000) {
+                        liveNaviPolled = now;
+                        NaviUpdate update = NaviUpdates.fromBundle(bridge.call(Protocol.NAVI_SNAPSHOT, new Bundle()));
+                        liveNavi = update;
+                        if (update != null && update.fresh(now) && now - liveNaviLogged >= 30000) { liveNaviLogged = now; report("NAVI live " + update.describe()); }
+                    }
                 } catch (Exception ignored) { /* Capture and control must remain independent of phone metadata. */ }
             }
             hudWorker.postDelayed(this, active ? 200 : 1000);
@@ -506,7 +639,7 @@ public final class FrameClient {
         }
         if (request == null) return;
         boolean owns = request.equals(ownerRequest);
-        if (owns) { ownerRequest = null; beginAccepted = null; active = displayReady = false; mode = null; tires.endSession(); battery.endSession(); hud.reset(); vehicleStop.run(); }
+        if (owns) { ownerRequest = null; beginAccepted = null; active = displayReady = false; mode = null; tires.endSession(); battery.endSession(); hud.reset(); vehicleStop.run(); naviTestStop.run(); themeSender.accept("", null); }
         pendingStops.add(request); bridge.ensure(); controlWorker.post(this::flushStops);
         worker.post(() -> { if (owns && ownerRequest == null) closeFrames(); });
     }
@@ -553,6 +686,20 @@ public final class FrameClient {
     }
     public DisplaySettings cachedSettings() { return savedSettings; }
     private FrameStamp stamp() { return new FrameStamp(pictureRevision, debugMode.enabled() ? 0 : hud.revision(SystemClock.elapsedRealtime())); }
+    /** Opens the module's own lamp screen; its Bluetooth permissions belong to the module, not to Ninebot. */
+    public void lampSettings(Activity activity, boolean dark) {
+        Bundle args = new Bundle(); args.putBoolean("dark", dark);
+        metadataCall(Protocol.LAMP_SETTINGS, args, result -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            try {
+                PendingIntent intent = result.getParcelable("lamp_intent", PendingIntent.class);
+                if (intent == null) throw new IllegalStateException("模块版本不匹配，请更新并重启九号出行");
+                ActivityOptions options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(Build.VERSION.SDK_INT >= 36
+                        ? ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE : ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                activity.startIntentSenderForResult(intent.getIntentSender(), -1, null, 0, 0, 0, options.toBundle());
+            } catch (Exception e) { android.widget.Toast.makeText(activity, "无法打开大灯控制：" + Ipc.error(e), 1).show(); }
+        }, error -> { if (!activity.isDestroyed()) android.widget.Toast.makeText(activity, error, 1).show(); });
+    }
     public void notificationSettings(Activity activity, boolean dark) {
         Bundle args = new Bundle(); args.putBoolean("dark", dark);
         metadataCall(Protocol.NOTIFICATION_SETTINGS, args, result -> {
@@ -640,7 +787,7 @@ public final class FrameClient {
             if (context != null) context.getSharedPreferences("dev.ichinomiya.ninebotenhance.cached_display", Context.MODE_PRIVATE).edit()
                     .putInt("width",value.width).putInt("height",value.height).putInt("dpi",value.dpi)
                     .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
-                    .putInt("background_color",value.backgroundColor).remove("top_inset").remove("top_color")
+                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, selected).apply();
         } catch (RuntimeException e) { report("SETTINGS cache write " + Ipc.error(e)); }
     }

@@ -13,6 +13,8 @@ import dev.ichinomiya.ninebotenhance.core.RegisterProbe;
 import dev.ichinomiya.ninebotenhance.core.RideState;
 import dev.ichinomiya.ninebotenhance.core.HillHoldDetector;
 import dev.ichinomiya.ninebotenhance.core.WidgetSettings;
+import dev.ichinomiya.ninebotenhance.core.HudPalette;
+import dev.ichinomiya.ninebotenhance.core.LampState;
 import dev.ichinomiya.ninebotenhance.core.WidgetCondition;
 import dev.ichinomiya.ninebotenhance.core.SidebarLayout;
 import java.util.*;
@@ -20,7 +22,8 @@ import java.util.*;
 /** Canvas counterpart of the approved HTML. Immutable card images; no UI overlays or touch injection. */
 public final class DashboardHud {
     private static final int SIDEBAR_RIGHT=838;
-    private static final int LABEL=0xffa6b6c2,UNIT=0xff8fa1ad,FRESH=0xfff4f8fa,ACCENT=0xff7cd6a4,PROBE_PENDING=0xffffc857;
+    /** Card colours of the current dashboard theme; a change re-encodes every card and drops the pre-rendered notification cards. */
+    private HudPalette p=HudPalette.DARK;
     /** Volume bar hold and slide times and its fill animation; the voltage chart window comes from the settings. */
     public static final long VOLUME_SHOW_MS=2200,VOLUME_SLIDE_MS=260,VOLUME_FILL_MS=150;
     private static final float INSET=10,VALUE_COLUMN=36,TYRE_INSET=8;
@@ -37,7 +40,11 @@ public final class DashboardHud {
     private String epoch="",session="";private long cursor=-1,revision,lastUpdate;private Bundle phone,music;
     private Bitmap artwork;private long artRevision=-1;private int notificationWidth=NotificationTimeline.DEFAULT_WIDTH;
     private boolean receiving;private int simulated;private long simulatedUntil;private int simulatedDuration=15000;
-    private CardMotion phoneMotion=new CardMotion(),musicMotion=new CardMotion(),voltageMotion=new CardMotion(),tyreMotion=new CardMotion(),speedMotion=new CardMotion(),powerMotion=new CardMotion();
+    private CardMotion phoneMotion=new CardMotion(),musicMotion=new CardMotion(),voltageMotion=new CardMotion(),tyreMotion=new CardMotion(),speedMotion=new CardMotion(),powerMotion=new CardMotion(),lampMotion=new CardMotion();
+    /** Lamp link and the height it last reported; it arrives with the dashboard snapshot, never estimated here. */
+    private LampState lamp=LampState.NONE;
+    /** Displayed brightness 0–100 the module computed from the raw height, its usable range and its reverse flag; -1 when unknown. */
+    private int lampPercent=-1;
     /** Per-widget windows opened by change conditions, indexed like WidgetSettings.CONDITIONAL; rest and lifted layouts of the last sync. */
     private final long[] shownUntil=new long[WidgetSettings.CONDITIONAL.length];private String musicKeyShown="";private boolean musicMovingShown;
     private SidebarLayout.Stack actualStack;
@@ -47,11 +54,15 @@ public final class DashboardHud {
     private TireTelemetry.Snapshot tires=TireTelemetry.EMPTY;
     private BatteryTelemetry.Snapshot battery=BatteryTelemetry.EMPTY;
     private WidgetSettings widgets=WidgetSettings.DEFAULT;
+    private volatile List<SidebarLayout.Box> occlusions=SidebarLayout.DEFAULT_OCCLUSIONS;
+    /** Dashboard-painted rectangles in the 848 x 480 reference frame; empty or null restores the calibrated instrument card. */
+    public void setOcclusions(List<SidebarLayout.Box> boxes){occlusions=boxes==null||boxes.isEmpty()?SidebarLayout.DEFAULT_OCCLUSIONS:List.copyOf(boxes);}
+    public List<SidebarLayout.Box> occlusions(){return occlusions;}
     private List<RegisterProbe.Row> probeRows;private RideState.Snapshot ride;
     public synchronized void reset(){reset("");}
     public synchronized void reset(String request){
         session=request;timeline.clear();phone=music=null;tires=TireTelemetry.EMPTY;battery=BatteryTelemetry.EMPTY;artwork=null;artRevision=-1;epoch="";cursor=-1;receiving=false;lastUpdate=0;simulatedUntil=0;
-        phoneMotion=new CardMotion();musicMotion=new CardMotion();voltageMotion=new CardMotion();tyreMotion=new CardMotion();speedMotion=new CardMotion();powerMotion=new CardMotion();detector.reset();
+        phoneMotion=new CardMotion();musicMotion=new CardMotion();voltageMotion=new CardMotion();tyreMotion=new CardMotion();speedMotion=new CardMotion();powerMotion=new CardMotion();lampMotion=new CardMotion();detector.reset();
         ride=null;Arrays.fill(shownUntil,0);musicKeyShown="";musicMovingShown=false;volumeSeq=-1;volumeShownAt=volumeShownUntil=-1;volumeFillAt=0;volumeFillFrom=volumeFillTo=0;revision++;
     }
     public synchronized void acceptTires(TireTelemetry.Snapshot snapshot){if(snapshot==null)snapshot=TireTelemetry.EMPTY;if(!tires.equals(snapshot)){tires=snapshot;revision++;}}
@@ -75,6 +86,8 @@ public final class DashboardHud {
     /** Debug register table; null or empty hides it. Equal snapshots do not re-encode. */
     public synchronized void acceptProbe(List<RegisterProbe.Row> rows){if(!Objects.equals(probeRows,rows)){probeRows=rows;revision++;}}
     private boolean probeShown(){return probeRows!=null&&!probeRows.isEmpty()&&widgets.enabled(WidgetSettings.REGISTER_PROBE);}
+    public synchronized void setDark(boolean dark){if(p.dark()==dark)return;p=HudPalette.of(dark);timeline.clear();revision++;}
+    public boolean dark(){return p.dark();}
     public synchronized void setWidgets(WidgetSettings value){if(!widgets.equals(value)){widgets=value;if(!widgets.enabled(WidgetSettings.NOTIFICATIONS)){timeline.clear();receiving=false;}revision++;}}
     public synchronized void request(Bundle args){args.putLong("hud_cursor",cursor);args.putString("hud_epoch",epoch);args.putLong("music_art_revision",artRevision);}
     public synchronized void accept(String request,Bundle state,long now){
@@ -97,6 +110,11 @@ public final class DashboardHud {
         if(!sameMusic(music,nextMusic)){music=nextMusic;revision++;}else music=nextMusic;
         long nextArt=music==null?-1:music.getLong("art_revision",-1);
         if(nextArt!=artRevision){artRevision=nextArt;artwork=music==null?null:music.getParcelable("art",Bitmap.class);revision++;}
+        Bundle lampState=state.getBundle("lamp");
+        LampState nextLamp=lampState==null?LampState.NONE:new LampState(lampState.getInt("phase"),lampState.getInt("position",-1),
+                lampState.getInt("speed",-1),lampState.getInt("low",-1),lampState.getInt("high",-1),lampState.getString("detail",""));
+        int nextPercent=lampState==null?-1:lampState.getInt("percent",-1);
+        if(!lamp.equals(nextLamp)||lampPercent!=nextPercent){lamp=nextLamp;lampPercent=nextPercent;revision++;}
         Bundle volume=state.getBundle("volume");
         if(volume!=null){long seq=volume.getLong("seq",-1);
             // The first snapshot of a session only records the level; later sequence numbers mean the user changed it.
@@ -149,9 +167,10 @@ public final class DashboardHud {
     private int visibleMask(long now){
         int mask=0;
         if(widgets.enabled(WidgetSettings.PHONE)&&phone!=null&&conditionMet(WidgetSettings.PHONE,now))mask|=WidgetSettings.PHONE;
-        if(widgets.enabled(WidgetSettings.MUSIC)&&musicActive()&&conditionMet(WidgetSettings.MUSIC,now))mask|=WidgetSettings.MUSIC;
+        // With the "always" condition the music card stays as an idle card when no media session exists.
+        if(widgets.enabled(WidgetSettings.MUSIC)&&(musicActive()?conditionMet(WidgetSettings.MUSIC,now):widgets.condition(WidgetSettings.MUSIC).mode()==WidgetCondition.ALWAYS))mask|=WidgetSettings.MUSIC;
         if(widgets.showsTyres()&&conditionMet(WidgetSettings.TYRES,now))mask|=WidgetSettings.TYRES;
-        for(int w:new int[]{WidgetSettings.VOLTAGE,WidgetSettings.SPEED,WidgetSettings.POWER,WidgetSettings.NOTIFICATIONS,WidgetSettings.VOLUME})if(widgets.enabled(w)&&conditionMet(w,now))mask|=w;
+        for(int w:new int[]{WidgetSettings.VOLTAGE,WidgetSettings.SPEED,WidgetSettings.POWER,WidgetSettings.NOTIFICATIONS,WidgetSettings.VOLUME,WidgetSettings.LAMP})if(widgets.enabled(w)&&conditionMet(w,now))mask|=w;
         return mask;
     }
     private boolean visible(int widget,long now){return (visibleMask(now)&widget)!=0;}
@@ -159,7 +178,7 @@ public final class DashboardHud {
     private int visibleBits(long now){int mask=visibleMask(now),bits=0;for(int i=0;i<WidgetSettings.CONDITIONAL.length;i++)if((mask&WidgetSettings.CONDITIONAL[i])!=0)bits|=1<<i;return bits;}
     /** Notification cards are held back entirely while the notification condition fails. */
     private List<NotificationTimeline.Entry<Card>> cards(long now){return conditionMet(WidgetSettings.NOTIFICATIONS,now)?timeline.entries(now):List.of();}
-    private boolean musicMoving(long now){return musicVisible(now)&&MusicPlayback.moving(music.getInt("state"));}
+    private boolean musicMoving(long now){return musicVisible(now)&&musicActive()&&MusicPlayback.moving(music.getInt("state"));}
     /** A change while hidden slides the bar in from the left; while visible it only extends the hold; during the slide-out it turns back. */
     private void volumeChanged(long now){
         float fraction=Math.max(0,Math.min(1,volumeLevel/(float)volumeMax));
@@ -190,7 +209,8 @@ public final class DashboardHud {
         sync(now);
         long tick=animating(now)?now/50:musicMoving(now)||chartLive(now)||probeShown()?now/1000:0;
         long flags=expiryFlags(now)|(hillHold(now)?1024:0)|(volumeVisible(now)?2048:0)|((long)visibleBits(now)<<12);
-        return(revision<<44)^((flags&0xFFFFFL)<<24)^(tick&0xFFFFFFL);
+        // Nine conditional widgets need 21 flag bits; the tick keeps the rest of the 44 below the revision.
+        return(revision<<44)^((flags&0x1FFFFFL)<<23)^(tick&0x7FFFFFL);
     }
     private static boolean expired(long elapsedTime,long now,long limit){return now-elapsedTime>limit;}
     private boolean expired(TireTelemetry.Value value,long now){return value==null||expired(value.elapsedTime(),now,widgets.tyreLimitMs());}
@@ -203,13 +223,14 @@ public final class DashboardHud {
         if(widgets.enabled(WidgetSettings.POWER))flags|=powerExpired(now)?512:0;
         return flags;
     }
-    public synchronized boolean animating(long now){sync(now);return !cards(now).isEmpty()||phoneMotion.animating(now)||musicMotion.animating(now)||voltageMotion.animating(now)||tyreMotion.animating(now)||speedMotion.animating(now)||powerMotion.animating(now)||volumeAnimating(now);}
+    public synchronized boolean animating(long now){sync(now);return !cards(now).isEmpty()||phoneMotion.animating(now)||musicMotion.animating(now)||voltageMotion.animating(now)||tyreMotion.animating(now)||speedMotion.animating(now)||powerMotion.animating(now)||lampMotion.animating(now)||volumeAnimating(now);}
     public synchronized String summary(long now){return "notifications="+receiving+" visible="+timeline.entries(now).size()+" phone="+(phone!=null)+" phonePermission="+(phone!=null&&phone.getBoolean("phone_permission"))+" ageMs="+(lastUpdate==0?-1:now-lastUpdate);}
     public synchronized void draw(Canvas canvas,int width,int height,long now){
         if(width<=0||height<=0)return;int save=canvas.save();
         try{canvas.clipRect(0,0,width,height);float scale=Math.min(width/848f,height/480f);canvas.translate(width-848*scale,height-480*scale);canvas.scale(scale,scale);
             List<NotificationTimeline.Entry<Card>> cards=cards(now);SidebarLayout.Stack actual=layout(cards,now);
             float dx=hillHold(now)&&actual.notificationDodged()?SidebarLayout.dodgeShift():0,dyN=actual.notificationBottom()-SidebarLayout.BOTTOM;
+            drawCard(canvas,lampMotion,now,box->drawLamp(canvas,box));
             drawCard(canvas,powerMotion,now,box->drawPower(canvas,now,box));
             drawCard(canvas,speedMotion,now,box->drawSpeed(canvas,now,box));
             drawCard(canvas,tyreMotion,now,box->drawTyres(canvas,now,box));
@@ -221,7 +242,7 @@ public final class DashboardHud {
             for(NotificationTimeline.Entry<Card> e:cards){
                 float exit=e.exit(now);float w=e.data.bitmap.getWidth();SidebarLayout.Box bounds=notificationBox(e,now);float x=bounds.left()+dx,y=bounds.top()+dyN;
                 paint.setAlpha(Math.round(255*Math.min(1,(now-e.born)/88f)*(1-exit)));canvas.drawBitmap(e.data.bitmap,x,y,paint);paint.setAlpha(255);
-                float remaining=Math.max(0,(e.expires-now)/(float)(e.expires-e.born));paint.setColor(0x887cd6a4);canvas.drawRect(x+12,y+SidebarLayout.NOTIFICATION_HEIGHT-3,x+12+(w-24)*remaining,y+SidebarLayout.NOTIFICATION_HEIGHT-1,paint);
+                float remaining=Math.max(0,(e.expires-now)/(float)(e.expires-e.born));paint.setColor(p.remaining());canvas.drawRect(x+12,y+SidebarLayout.NOTIFICATION_HEIGHT-3,x+12+(w-24)*remaining,y+SidebarLayout.NOTIFICATION_HEIGHT-1,paint);
             }
         }finally{paint.setAlpha(255);canvas.restoreToCount(save);}
     }
@@ -237,38 +258,38 @@ public final class DashboardHud {
     }
     private Bitmap card(Bundle b){
         int width=notificationWidth,height=(int)SidebarLayout.NOTIFICATION_HEIGHT;Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);bitmap.setDensity(Bitmap.DENSITY_NONE);Canvas c=new Canvas(bitmap);surface(c,0,0,width,height,12);
-        paint.setColor(ACCENT);c.drawRoundRect(0,12,2,48,1,1,paint);
-        Bitmap icon=b.getParcelable("icon",Bitmap.class);if(icon!=null&&!icon.isRecycled())c.drawBitmap(icon,null,new RectF(12,12,48,48),paint);else{paint.setColor(0xff526776);c.drawRoundRect(12,12,48,48,10,10,paint);write(c,"N",23,37,18,Color.WHITE,true);}
-        String app=fit(b.getString("app",""),Math.min(120,(width-80)*.4f),13,false);float appWidth=measure(app,13,false);write(c,app,width-12-appWidth,22,13,LABEL,false);
-        String title=b.getString("title","");if(title.isEmpty())title=b.getString("app","");write(c,fit(title,width-appWidth-76,17,true),58,26,17,FRESH,true);
-        write(c,fit(b.getString("text",""),width-70,15,false),58,48,15,0xffcfdae2,false);return bitmap;
+        paint.setColor(p.accent());c.drawRoundRect(0,12,2,48,1,1,paint);
+        Bitmap icon=b.getParcelable("icon",Bitmap.class);if(icon!=null&&!icon.isRecycled())c.drawBitmap(icon,null,new RectF(12,12,48,48),paint);else{paint.setColor(p.iconBox());c.drawRoundRect(12,12,48,48,10,10,paint);write(c,"N",23,37,18,p.iconGlyph(),true);}
+        String app=fit(b.getString("app",""),Math.min(120,(width-80)*.4f),13,false);float appWidth=measure(app,13,false);write(c,app,width-12-appWidth,22,13,p.label(),false);
+        String title=b.getString("title","");if(title.isEmpty())title=b.getString("app","");write(c,fit(title,width-appWidth-76,17,true),58,26,17,p.text(),true);
+        write(c,fit(b.getString("text",""),width-70,15,false),58,48,15,p.body(),false);return bitmap;
     }
-    private void surface(Canvas c,float x,float y,float w,float h,float radius){paint.setStyle(Paint.Style.FILL);paint.setColor(0xf5172027);c.drawRoundRect(x,y,x+w,y+h,radius,radius,paint);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(0x7a52636c);c.drawRoundRect(x+.5f,y+.5f,x+w-.5f,y+h-.5f,radius,radius,paint);paint.setStyle(Paint.Style.FILL);}
+    private void surface(Canvas c,float x,float y,float w,float h,float radius){paint.setStyle(Paint.Style.FILL);paint.setColor(p.surface());c.drawRoundRect(x,y,x+w,y+h,radius,radius,paint);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(p.border());c.drawRoundRect(x+.5f,y+.5f,x+w-.5f,y+h-.5f,radius,radius,paint);paint.setStyle(Paint.Style.FILL);}
     private void drawMusic(Canvas c,long now,SidebarLayout.Box box){
-        if(music==null)return;
+        boolean idle=!musicActive();
         float left=box.left(),contentLeft=left+12,contentRight=box.right()-12,contentWidth=contentRight-contentLeft;
         surface(c,left,0,box.right()-left,SidebarLayout.MUSIC_HEIGHT,11);
-        int state=music.getInt("state");float headerCenter=MUSIC_HEADER,artTop=MUSIC_ART_TOP,art=MUSIC_ART;
+        int state=idle?0:music.getInt("state");float headerCenter=MUSIC_HEADER,artTop=MUSIC_ART_TOP,art=MUSIC_ART;
         int save=c.save();Path clip=new Path();clip.addRoundRect(contentLeft,artTop,contentLeft+art,artTop+art,8,8,Path.Direction.CW);c.clipPath(clip);
         // surface() ends with the translucent border paint; artwork must be drawn at full opacity.
         paint.setAlpha(255);
-        if(artwork!=null&&!artwork.isRecycled())c.drawBitmap(artwork,null,new RectF(contentLeft,artTop,contentLeft+art,artTop+art),paint);
-        else{paint.setColor(0xff31434e);c.drawRect(contentLeft,artTop,contentLeft+art,artTop+art,paint);centerGlyph(c,"♪",contentLeft+art/2,headerCenter,28,0xff9fb9c6,true);}
+        if(!idle&&artwork!=null&&!artwork.isRecycled())c.drawBitmap(artwork,null,new RectF(contentLeft,artTop,contentLeft+art,artTop+art),paint);
+        else{paint.setColor(p.artBox());c.drawRect(contentLeft,artTop,contentLeft+art,artTop+art,paint);centerGlyph(c,"♪",contentLeft+art/2,headerCenter,28,p.artGlyph(),true);}
         if(state==2){
             float centerX=contentLeft+art/2;
-            paint.setColor(0x99000000);c.drawCircle(centerX,headerCenter,11,paint);
-            paint.setColor(Color.WHITE);
+            paint.setColor(p.pauseBackdrop());c.drawCircle(centerX,headerCenter,11,paint);
+            paint.setColor(p.pauseGlyph());
             c.drawRoundRect(centerX-5,headerCenter-6,centerX-2,headerCenter+6,1,1,paint);
             c.drawRoundRect(centerX+2,headerCenter-6,centerX+5,headerCenter+6,1,1,paint);
         }c.restoreToCount(save);
         float labelsLeft=contentLeft+art+8,labelsWidth=contentRight-labelsLeft;
-        centerLine(c,fit(musicTitle(),labelsWidth,13,true),labelsLeft,headerCenter-8,13,FRESH,true);
-        centerLine(c,fit(musicArtist(),labelsWidth,10,false),labelsLeft,headerCenter+9,10,LABEL,false);
-        long duration=music.getLong("duration");
-        long position=MusicPlayback.position(music.getLong("position",-1),duration,state,music.getFloat("speed"),music.getLong("updated"),now);
+        centerLine(c,fit(idle?"无播放":musicTitle(),labelsWidth,13,true),labelsLeft,idle?headerCenter:headerCenter-8,13,p.text(),true);
+        if(!idle)centerLine(c,fit(musicArtist(),labelsWidth,10,false),labelsLeft,headerCenter+9,10,p.label(),false);
+        long duration=idle?0:music.getLong("duration");
+        long position=idle?-1:MusicPlayback.position(music.getLong("position",-1),duration,state,music.getFloat("speed"),music.getLong("updated"),now);
         float fraction=duration>0&&position>=0?Math.min(1,position/(float)duration):0;
-        bar(c,contentLeft,MUSIC_BAR_Y,contentWidth,2,fraction);centerLine(c,MusicPlayback.time(position),contentLeft,MUSIC_TIME_Y,9,LABEL,false);
-        String end=duration>0?MusicPlayback.time(duration):"--:--";centerLine(c,end,contentRight-measure(end,9,false),MUSIC_TIME_Y,9,LABEL,false);
+        bar(c,contentLeft,MUSIC_BAR_Y,contentWidth,2,fraction);centerLine(c,MusicPlayback.time(position),contentLeft,MUSIC_TIME_Y,9,p.label(),false);
+        String end=duration>0?MusicPlayback.time(duration):"--:--";centerLine(c,end,contentRight-measure(end,9,false),MUSIC_TIME_Y,9,p.label(),false);
     }
     private String musicTitle(){String title=music==null?"":music.getString("title","");return title.isEmpty()?"未知曲目":title;}
     private String musicArtist(){String artist=music==null?"":music.getString("artist","");return artist.isEmpty()?"未知歌手":artist;}
@@ -289,11 +310,11 @@ public final class DashboardHud {
     private float tyreWheel(Canvas c,String label,TireTelemetry.Wheel wheel,long now,float x,float centerY){
         String pressure=expired(wheel.pressure(),now)?"--":TireTelemetry.pressure(wheel.pressure());
         String temperature=expired(wheel.temperature(),now)?"--":TireTelemetry.temperature(wheel.temperature());
-        centerLine(c,label,x,centerY,TYRE_LABEL,LABEL,false);x+=measure(label,TYRE_LABEL,false)+3;
-        centerLine(c,pressure,x,centerY,TYRE_VALUE,FRESH,true);x+=measure(pressure,TYRE_VALUE,true)+2;
-        centerLine(c,"bar",x,centerY,TYRE_UNIT,UNIT,false);x+=measure("bar",TYRE_UNIT,false)+4;
-        centerLine(c,temperature,x,centerY,TYRE_VALUE,FRESH,true);x+=measure(temperature,TYRE_VALUE,true)+1;
-        centerLine(c,"℃",x,centerY,TYRE_UNIT,UNIT,false);return x+measure("℃",TYRE_UNIT,false);
+        centerLine(c,label,x,centerY,TYRE_LABEL,p.label(),false);x+=measure(label,TYRE_LABEL,false)+3;
+        centerLine(c,pressure,x,centerY,TYRE_VALUE,p.text(),true);x+=measure(pressure,TYRE_VALUE,true)+2;
+        centerLine(c,"bar",x,centerY,TYRE_UNIT,p.unit(),false);x+=measure("bar",TYRE_UNIT,false)+4;
+        centerLine(c,temperature,x,centerY,TYRE_VALUE,p.text(),true);x+=measure(temperature,TYRE_VALUE,true)+1;
+        centerLine(c,"℃",x,centerY,TYRE_UNIT,p.unit(),false);return x+measure("℃",TYRE_UNIT,false);
     }
     /** Width the enabled wheels actually need right now, used only to squeeze an overlong row. */
     private float tyreContentWidth(long now){
@@ -312,9 +333,9 @@ public final class DashboardHud {
         float left=box.left(),contentLeft=left+INSET,contentRight=box.right()-INSET;
         surface(c,left,0,box.right()-left,SidebarLayout.metricHeight(chart),11);
         float centerY=SidebarLayout.VOLTAGE_HEIGHT/2;
-        centerLine(c,label,contentLeft,centerY,13,LABEL,false);
-        centerLine(c,value,contentLeft+VALUE_COLUMN,centerY,17,FRESH,true);
-        centerLine(c,unit,contentLeft+VALUE_COLUMN+measure(value,17,true)+4,centerY,11,UNIT,false);
+        centerLine(c,label,contentLeft,centerY,13,p.label(),false);
+        centerLine(c,value,contentLeft+VALUE_COLUMN,centerY,17,p.text(),true);
+        centerLine(c,unit,contentLeft+VALUE_COLUMN+measure(value,17,true)+4,centerY,11,p.unit(),false);
         if(chart)drawChart(c,now,history,window,decimals,minSpan,contentLeft,30,contentRight,SidebarLayout.VOLTAGE_CHART_HEIGHT-6);
     }
     private void drawVoltage(Canvas c,long now,SidebarLayout.Box box){
@@ -327,23 +348,45 @@ public final class DashboardHud {
     private void drawPower(Canvas c,long now,SidebarLayout.Box box){
         drawMetric(c,now,box,"功率",powerExpired(now)?"--":String.valueOf(ride.power()),"W",powerHistory,widgets.enabled(WidgetSettings.POWER_CHART),widgets.powerChartWindowMs(),0,50f);
     }
+    /** Height the hoist reported, or why it is not reporting one; the module never estimates a position locally. */
+    private void drawLamp(Canvas c,SidebarLayout.Box box){
+        float left=box.left(),contentLeft=left+INSET;boolean known=lamp.knownPosition()&&lampPercent>=0;
+        surface(c,left,0,box.right()-left,SidebarLayout.LAMP_HEIGHT,11);
+        // The brightness fills the card from the left behind the text: half the width at 50 %, so the card body reads as a level.
+        if(known&&lampPercent>0){
+            float frac=Math.min(1,lampPercent/100f);int save=c.save();
+            Path clip=new Path();clip.addRoundRect(left,0,box.right(),SidebarLayout.LAMP_HEIGHT,11,11,Path.Direction.CW);c.clipPath(clip);
+            paint.setColor(p.chartFill());c.drawRect(left,0,left+(box.right()-left)*frac,SidebarLayout.LAMP_HEIGHT,paint);
+            c.restoreToCount(save);
+        }
+        float centerY=SidebarLayout.LAMP_HEIGHT/2;
+        centerLine(c,"大灯",contentLeft,centerY,13,p.label(),false);
+        String value=lampText();
+        centerLine(c,value,contentLeft+VALUE_COLUMN,centerY,known?17:13,known?p.text():p.unit(),known);
+        if(known)centerLine(c,"%",contentLeft+VALUE_COLUMN+measure(value,17,true)+4,centerY,11,p.unit(),false);
+    }
+    private String lampText(){return lamp.knownPosition()&&lampPercent>=0?String.valueOf(lampPercent):"未连接";}
+    private float lampWidth(){
+        boolean known=lamp.knownPosition()&&lampPercent>=0;String value=lampText();
+        return 2*INSET+VALUE_COLUMN+measure(value,known?17:13,known)+(known?4+measure("%",11,false):0);
+    }
     private boolean speedExpired(long now){return ride==null||ride.speedAt()==0||ride.speedTenths()<0||now-ride.speedAt()>widgets.speedLimitMs();}
     private boolean powerExpired(long now){return ride==null||!ride.hasPower()||now-ride.powerAt()>widgets.powerLimitMs();}
     private void drawChart(Canvas c,long now,ArrayDeque<Sample> history,long window,int decimals,float minSpan,float left,float top,float right,float bottom){
-        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(0x5552636c);c.drawLine(left,bottom+.5f,right,bottom+.5f,paint);paint.setStyle(Paint.Style.FILL);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(p.divider());c.drawLine(left,bottom+.5f,right,bottom+.5f,paint);paint.setStyle(Paint.Style.FILL);
         float min=Float.MAX_VALUE,max=-Float.MAX_VALUE;int count=0;long start=now-window;
         for(Sample s:history){if(s.elapsed()<start||s.elapsed()>now)continue;count++;min=Math.min(min,s.value());max=Math.max(max,s.value());}
-        if(count<2){centerLine(c,"曲线采样中",left,(top+bottom)/2,9,UNIT,false);return;}
+        if(count<2){centerLine(c,"曲线采样中",left,(top+bottom)/2,9,p.unit(),false);return;}
         float span=Math.max(minSpan,max-min),lo=(min+max)/2-span*.6f,hi=(min+max)/2+span*.6f;
         chartLine.reset();chartFill.reset();boolean started=false;float lastX=left;
         for(Sample s:history){if(s.elapsed()<start||s.elapsed()>now)continue;
             float x=left+(s.elapsed()-start)/(float)window*(right-left),y=bottom-(s.value()-lo)/(hi-lo)*(bottom-top);
             if(!started){chartLine.moveTo(x,y);chartFill.moveTo(x,bottom);chartFill.lineTo(x,y);started=true;}else{chartLine.lineTo(x,y);chartFill.lineTo(x,y);}lastX=x;}
         chartFill.lineTo(lastX,bottom);chartFill.close();
-        paint.setColor(0x337cd6a4);c.drawPath(chartFill,paint);
-        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setStrokeJoin(Paint.Join.ROUND);paint.setColor(ACCENT);c.drawPath(chartLine,paint);paint.setStyle(Paint.Style.FILL);
+        paint.setColor(p.chartFill());c.drawPath(chartFill,paint);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setStrokeJoin(Paint.Join.ROUND);paint.setColor(p.accent());c.drawPath(chartLine,paint);paint.setStyle(Paint.Style.FILL);
         String pattern=decimals==0?"%.0f":"%.1f",high=String.format(Locale.ROOT,pattern,max),low=String.format(Locale.ROOT,pattern,min);
-        write(c,high,right-measure(high,8,false),top+7,8,UNIT,false);write(c,low,right-measure(low,8,false),bottom-1,8,UNIT,false);
+        write(c,high,right-measure(high,8,false),top+7,8,p.unit(),false);write(c,low,right-measure(low,8,false),bottom-1,8,p.unit(),false);
     }
     private float metricWidth(boolean chart,String template,String unit){return chart?SidebarLayout.WIDTH:2*INSET+VALUE_COLUMN+measure(template,17,true)+4+measure(unit,11,false);}
     private float voltageWidth(){return metricWidth(widgets.enabled(WidgetSettings.VOLTAGE_CHART),"888.8","V");}
@@ -356,9 +399,9 @@ public final class DashboardHud {
         float radius=b.width()/2;surface(c,b.left(),b.top(),b.width(),b.height(),radius);
         float inset=4,fraction=volumeFill(now);
         float innerRadius=(b.width()-2*inset)/2,fillTop=b.bottom()-inset-(b.height()-2*inset)*fraction;
-        paint.setColor(0xff40515b);c.drawRoundRect(b.left()+inset,b.top()+inset,b.right()-inset,b.bottom()-inset,innerRadius,innerRadius,paint);
-        if(fraction>0){paint.setColor(ACCENT);c.drawRoundRect(b.left()+inset,Math.min(fillTop,b.bottom()-inset-2*innerRadius),b.right()-inset,b.bottom()-inset,innerRadius,innerRadius,paint);}
-        String label=Math.round(volumeFillTo*100)+"%";write(c,label,(b.left()+b.right())/2-measure(label,12,true)/2,b.top()-8,12,FRESH,true);
+        paint.setColor(p.track());c.drawRoundRect(b.left()+inset,b.top()+inset,b.right()-inset,b.bottom()-inset,innerRadius,innerRadius,paint);
+        if(fraction>0){paint.setColor(p.accent());c.drawRoundRect(b.left()+inset,Math.min(fillTop,b.bottom()-inset-2*innerRadius),b.right()-inset,b.bottom()-inset,innerRadius,innerRadius,paint);}
+        String label=Math.round(volumeFillTo*100)+"%";write(c,label,(b.left()+b.right())/2-measure(label,12,true)/2,b.top()-8,12,p.text(),true);
         c.restoreToCount(saved);
     }
     /** Debug overlay at the left: register name, last bytes and seconds since the reply. Amber while a read is in flight, green when the value changed within three seconds, grey when unanswered. Display only. */
@@ -370,17 +413,17 @@ public final class DashboardHud {
         int columns=Math.max(1,(rows.size()+PROBE_ROWS_PER_COLUMN-1)/PROBE_ROWS_PER_COLUMN),perColumn=(rows.size()+columns-1)/columns;
         surface(c,PROBE_LEFT,PROBE_TOP,columns*PROBE_COLUMN+6,16+perColumn*PROBE_ROW+6,8);
         String header=all.size()>capacity?"寄存器探测 "+all.size()+"（有回复 "+RegisterProbe.replied(all)+"，3 秒内变化 "+RegisterProbe.changed(all,now,RegisterProbe.CHANGE_HIGHLIGHT_MS)+"；按变化时间排序）":"寄存器探测 "+all.size();
-        centerLine(c,header,PROBE_LEFT+8,PROBE_TOP+9,9,LABEL,false);
+        centerLine(c,header,PROBE_LEFT+8,PROBE_TOP+9,9,p.label(),false);
         for(int i=0;i<rows.size();i++){
             RegisterProbe.Row row=rows.get(i);RegisterProbe.Value v=row.value();int column=i/perColumn,line=i%perColumn;
             float x=PROBE_LEFT+6+column*PROBE_COLUMN,y=PROBE_TOP+18+line*PROBE_ROW+PROBE_ROW/2;
             boolean pending=v!=null&&v.pending(),changed=v!=null&&v.changedWithin(now,RegisterProbe.CHANGE_HIGHLIGHT_MS),silent=v!=null&&v.silent();
-            int color=pending?PROBE_PENDING:changed?ACCENT:silent?UNIT:FRESH;
-            if(pending){paint.setStyle(Paint.Style.FILL);paint.setColor(PROBE_PENDING);c.drawCircle(x+2,y,2,paint);}
-            centerLine(c,row.name(),x+8,y,10,pending?PROBE_PENDING:changed?ACCENT:LABEL,false);
+            int color=pending?p.probePending():changed?p.accent():silent?p.unit():p.text();
+            if(pending){paint.setStyle(Paint.Style.FILL);paint.setColor(p.probePending());c.drawCircle(x+2,y,2,paint);}
+            centerLine(c,row.name(),x+8,y,10,pending?p.probePending():changed?p.accent():p.label(),false);
             centerLine(c,v==null||v.repliedAt()==0?"--":v.hex(),x+112,y,11,color,true);
             String age=v==null?"":v.repliedAt()>0?(now-v.repliedAt())/1000+"s":silent?"无回复":"…";
-            centerLine(c,age,x+PROBE_COLUMN-10-measure(age,9,false),y,9,silent?UNIT:LABEL,false);
+            centerLine(c,age,x+PROBE_COLUMN-10-measure(age,9,false),y,9,silent?p.unit():p.label(),false);
         }
     }
     /** Right-anchored phone layout shared by drawing and sizing: percentage, battery, Wi-Fi/network slot, then the SIMs. */
@@ -398,8 +441,8 @@ public final class DashboardHud {
         return new PhoneLayout(width,simsX,slotX,batteryX,percentLeft,slot,count,known,percent);
     }
     private float phoneWidth(){return phone==null?0:phoneLayout(SIDEBAR_RIGHT).width();}
-    private SidebarLayout.Sizes sizes(){return new SidebarLayout.Sizes(phoneWidth(),musicWidth(),voltageWidth(),tyreWidth(),speedWidth(),powerWidth());}
-    private void bar(Canvas c,float x,float y,float width,float height,float fraction){paint.setStyle(Paint.Style.FILL);paint.setColor(0xff40515b);c.drawRoundRect(x,y,x+width,y+height,height/2,height/2,paint);paint.setColor(ACCENT);c.drawRoundRect(x,y,x+width*Math.max(0,Math.min(1,fraction)),y+height,height/2,height/2,paint);}
+    private SidebarLayout.Sizes sizes(){return new SidebarLayout.Sizes(phoneWidth(),musicWidth(),voltageWidth(),tyreWidth(),speedWidth(),powerWidth(),lampWidth());}
+    private void bar(Canvas c,float x,float y,float width,float height,float fraction){paint.setStyle(Paint.Style.FILL);paint.setColor(p.track());c.drawRoundRect(x,y,x+width,y+height,height/2,height/2,paint);paint.setColor(p.accent());c.drawRoundRect(x,y,x+width*Math.max(0,Math.min(1,fraction)),y+height,height/2,height/2,paint);}
     /** Display-only HUD consumes touches so they cannot reach the application behind it; cards use their settled targets. */
     public synchronized Bundle touch(float x,float y,int width,int height,long now){
         float scale=Math.min(width/848f,height/480f);if(scale<=0)return null;x=(x-(width-848*scale))/scale;y=(y-(height-480*scale))/scale;
@@ -407,7 +450,7 @@ public final class DashboardHud {
         List<NotificationTimeline.Entry<Card>> cards=cards(now);SidebarLayout.Stack stack=layout(cards,now);
         float dx=hillHold(now)&&stack.notificationDodged()?SidebarLayout.dodgeShift():0,dyN=stack.notificationBottom()-SidebarLayout.BOTTOM;
         for(NotificationTimeline.Entry<Card> e:cards)if(notificationBox(e,now).contains(x-dx,y-dyN))return hit;
-        for(SidebarLayout.Box box:new SidebarLayout.Box[]{stack.phone(),stack.music(),stack.voltage(),stack.tyres(),stack.speed(),stack.power()})if(box!=null&&box.contains(x,y))return hit;
+        for(SidebarLayout.Box box:new SidebarLayout.Box[]{stack.phone(),stack.music(),stack.voltage(),stack.tyres(),stack.speed(),stack.power(),stack.lamp()})if(box!=null&&box.contains(x,y))return hit;
         return null;
     }
     private SidebarLayout.Box notificationBox(NotificationTimeline.Entry<Card> entry,long now){return SidebarLayout.notification(entry.data.bitmap.getWidth(),entry.slot(now),entry.enter(now),entry.exit(now));}
@@ -419,8 +462,8 @@ public final class DashboardHud {
      */
     private SidebarLayout.Stack layout(List<NotificationTimeline.Entry<Card>> cards,long now){
         float lift=lift(cards,now);boolean hold=hillHold(now);
-        SidebarLayout.Stack actual=SidebarLayout.arrange(widgets,visibleMask(now),lift,sizes(),hold);
-        phoneMotion.target(actual.phone(),now);musicMotion.target(actual.music(),now);voltageMotion.target(actual.voltage(),now);tyreMotion.target(actual.tyres(),now);speedMotion.target(actual.speed(),now);powerMotion.target(actual.power(),now);
+        SidebarLayout.Stack actual=SidebarLayout.arrange(widgets,visibleMask(now),lift,sizes(),hold,occlusions);
+        phoneMotion.target(actual.phone(),now);musicMotion.target(actual.music(),now);voltageMotion.target(actual.voltage(),now);tyreMotion.target(actual.tyres(),now);speedMotion.target(actual.speed(),now);powerMotion.target(actual.power(),now);lampMotion.target(actual.lamp(),now);
         actualStack=actual;return actual;
     }
     private void sync(long now){layout(cards(now),now);}
@@ -434,15 +477,15 @@ public final class DashboardHud {
         PhoneLayout l=phoneLayout(box.right());int count=l.count();
         float y=0;surface(c,box.left(),y,box.right()-box.left(),28,11);
         float x=l.simsX();
-        if(!l.known()||count==0){write(c,l.known()?"无卡":"?",x,y+19,11,0xff9db1bf,false);x+=24;}else for(int i=0;i<count;i++){
-            write(c,String.valueOf(slots.get(i)),x,y+20,11,0xff9db1bf,false);int signal=levels!=null&&i<levels.size()?levels.get(i):-1;
-            for(int bar=0;bar<4;bar++){paint.setColor(bar<signal?0xffe0eaf1:0xff4b5a66);c.drawRoundRect(x+10+bar*6,y+22-(bar+1)*4,x+14+bar*6,y+22,1,1,paint);}if(signal<0)write(c,"?",x+16,y+15,10,0xffe0eaf1,false);x+=32+(i<count-1?6:0);
+        if(!l.known()||count==0){write(c,l.known()?"无卡":"?",x,y+19,11,p.dim(),false);x+=24;}else for(int i=0;i<count;i++){
+            write(c,String.valueOf(slots.get(i)),x,y+20,11,p.dim(),false);int signal=levels!=null&&i<levels.size()?levels.get(i):-1;
+            for(int bar=0;bar<4;bar++){paint.setColor(bar<signal?p.icon():p.signalOff());c.drawRoundRect(x+10+bar*6,y+22-(bar+1)*4,x+14+bar*6,y+22,1,1,paint);}if(signal<0)write(c,"?",x+16,y+15,10,p.icon(),false);x+=32+(i<count-1?6:0);
         }
-        if(wifi)drawWifi(c,l.slotX()+(SLOT_WIDTH-19)/2,y+4.5f);else if(l.slot())centerGlyph(c,network,l.slotX()+SLOT_WIDTH/2,y+14,13,0xffe0eaf1,true);
-        x=l.batteryX();int level=phone.getInt("battery",-1);boolean charging=phone.getBoolean("charging");int color=charging?0xffb6f681:level>=0&&level<=20?0xffffbc72:0xffe0eaf1;
+        if(wifi)drawWifi(c,l.slotX()+(SLOT_WIDTH-19)/2,y+4.5f);else if(l.slot())centerGlyph(c,network,l.slotX()+SLOT_WIDTH/2,y+14,13,p.icon(),true);
+        x=l.batteryX();int level=phone.getInt("battery",-1);boolean charging=phone.getBoolean("charging");int color=charging?p.batteryCharging():level>=0&&level<=20?p.batteryLow():p.icon();
         paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);c.drawRoundRect(x+1,y+7,x+24,y+21,3,3,paint);c.drawLine(x+26,y+11,x+26,y+17,paint);paint.setStyle(Paint.Style.FILL);if(level>0)c.drawRoundRect(x+3.5f,y+9.5f,x+3.5f+18*Math.min(100,level)/100f,y+18.5f,1,1,paint);
-        if(charging){Path bolt=new Path();bolt.moveTo(x+14,y+6);bolt.lineTo(x+8,y+15);bolt.lineTo(x+12,y+15);bolt.lineTo(x+11,y+22);bolt.lineTo(x+18,y+12);bolt.lineTo(x+13,y+12);bolt.close();paint.setColor(0xff172027);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);c.drawPath(bolt,paint);paint.setStyle(Paint.Style.FILL);paint.setColor(Color.WHITE);c.drawPath(bolt,paint);}
-        write(c,l.percent(),l.percentLeft(),y+19,14,0xffe8f0f5,true);
+        if(charging){Path bolt=new Path();bolt.moveTo(x+14,y+6);bolt.lineTo(x+8,y+15);bolt.lineTo(x+12,y+15);bolt.lineTo(x+11,y+22);bolt.lineTo(x+18,y+12);bolt.lineTo(x+13,y+12);bolt.close();paint.setColor(p.boltOutline());paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);c.drawPath(bolt,paint);paint.setStyle(Paint.Style.FILL);paint.setColor(p.bolt());c.drawPath(bolt,paint);}
+        write(c,l.percent(),l.percentLeft(),y+19,14,p.percent(),true);
     }
     /** Same three arcs and dot as i-wifi in the HTML prototype, in its 24 by 24 viewBox. */
     private static Path wifiGlyph(){
@@ -455,7 +498,7 @@ public final class DashboardHud {
     }
     private void drawWifi(Canvas c,float x,float y){
         int save=c.save();c.translate(x,y);c.scale(19f/24,19f/24);
-        paint.setColor(0xffe0eaf1);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setColor(p.icon());paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setStrokeCap(Paint.Cap.ROUND);
         c.drawPath(wifiGlyph,paint);paint.setStyle(Paint.Style.FILL);c.drawCircle(12,19,1,paint);c.restoreToCount(save);
     }
     private void font(float size,boolean bold){text.setTextSize(size);text.setTypeface(bold?Typeface.create("sans-serif",Typeface.BOLD):Typeface.create("sans-serif",Typeface.NORMAL));}

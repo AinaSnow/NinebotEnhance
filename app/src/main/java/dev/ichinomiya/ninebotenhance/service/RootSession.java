@@ -95,7 +95,7 @@ public final class RootSession {
             context.getSharedPreferences("virtual_display", 0).edit().putInt("width", value.width)
                     .putInt("height",value.height).putInt("dpi",value.dpi)
                     .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
-                    .putInt("background_color",value.backgroundColor).remove("top_inset").remove("top_color")
+                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, app.flattenToString()).apply();
         }
     }
@@ -184,6 +184,10 @@ public final class RootSession {
                 String request = lease.request(), error = args.getString("error", "未知错误");
                 main.post(() -> stop(request, error));
             } else if ("log".equals(method)) Diagnostics.add("ROOT " + args.getString("message", ""));
+            else if ("navi_resume".equals(method)) {
+                String uri = dev.ichinomiya.ninebotenhance.navi.NaviHub.get().resumeUri(args.getString("package", ""));
+                if (uri != null) result.putString("uri", uri);
+            }
             else throw new IllegalArgumentException("未知操作");
         }
         return result;

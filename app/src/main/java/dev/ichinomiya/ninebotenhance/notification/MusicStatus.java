@@ -14,6 +14,8 @@ public final class MusicStatus {
     private volatile Bundle cached=new Bundle();private boolean pending;private long sampled=-10000;
     private MediaController selected;private String selectedId="";private Bitmap artwork;private long artRevision;
     public MusicStatus(Context context){this.context=context.getApplicationContext();HandlerThread thread=new HandlerThread("Ninebot-Music",android.os.Process.THREAD_PRIORITY_BACKGROUND);thread.start();worker=new Handler(thread.getLooper());}
+    /** Whether the last sample had a track that was actually moving; used to decide who owns the volume keys. */
+    public boolean playing(){Bundle b=cached;return b.getBoolean("active")&&MusicPlayback.moving(b.getInt("state"));}
     public synchronized Bundle snapshot(long knownArt){
         if(!new NotificationPreferences(context).granted()){worker.post(()->{selected=null;selectedId="";artwork=null;});cached=new Bundle();return new Bundle();}
         long now=SystemClock.elapsedRealtime();

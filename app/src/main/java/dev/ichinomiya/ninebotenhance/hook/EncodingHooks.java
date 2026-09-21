@@ -4,13 +4,18 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.os.Bundle;
 import dev.ichinomiya.ninebotenhance.client.FrameClient;
+import dev.ichinomiya.ninebotenhance.core.EncoderOverride;
 import dev.ichinomiya.ninebotenhance.diagnostics.*;
 import io.github.libxposed.api.XposedModule;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Read-only configuration/output observers, installed only inside the Ninebot process. */
+/**
+ * Configuration/output observers plus the user's encoder overrides, installed only inside the Ninebot process. Overrides touch only the
+ * vehicle session's video encoder: its MediaFormat before configure, the capture VideoConfig getters, the encoder loop interval, and a
+ * live bitrate change through MediaCodec.setParameters.
+ */
 public final class EncodingHooks {
     private final XposedModule module;
     private final FrameClient frames;
@@ -20,7 +25,8 @@ public final class EncodingHooks {
     private final ThreadLocal<Scope> context=new ThreadLocal<>();
     private final WeakIdentityMap<EncodingDiagnostics.Session> created=new WeakIdentityMap<>();
     private final WeakIdentityMap<EncodingDiagnostics.Session> captureOwners=new WeakIdentityMap<>();
-    public EncodingHooks(XposedModule module,FrameClient frames) { this.module=module;this.frames=frames;log=frames.encoding(); }
+    private final Map<Object,Boolean> liveCodecs=Collections.synchronizedMap(new WeakHashMap<>());
+    public EncodingHooks(XposedModule module,FrameClient frames) { this.module=module;this.frames=frames;log=frames.encoding();frames.setEncoderOverrideApplier(this::apply); }
 
     public void install() {
         int installed=0;
@@ -45,14 +51,18 @@ public final class EncodingHooks {
                 if(create)session=captureSession();
                 if(configure) {
                     try {
-                        requested=read((MediaFormat)chain.getArg(0));
-                        if((((Integer)chain.getArg(flagIndex))&MediaCodec.CONFIGURE_FLAG_ENCODE)!=0 && requested.mime().startsWith("video/")) {
+                        MediaFormat format=(MediaFormat)chain.getArg(0);
+                        requested=read(format);
+                        boolean videoEncoder=(((Integer)chain.getArg(flagIndex))&MediaCodec.CONFIGURE_FLAG_ENCODE)!=0 && requested.mime().startsWith("video/");
+                        if(videoEncoder) {
                             EncodingDiagnostics.Session candidate=created.get(codec);
                             if(candidate==null)candidate=captureSession();
+                            // Only the vehicle session's own encoder is overridden, right before Ninebot configures it.
+                            if(candidate!=null&&override(format))requested=read(format);
                             if(candidate!=null&&log.associate(candidate,codec))session=candidate;
                         }
                         // A decoder or non-video reconfiguration must never appear as a cast encoder.
-                        if((((Integer)chain.getArg(flagIndex))&MediaCodec.CONFIGURE_FLAG_ENCODE)==0 || !requested.mime().startsWith("video/")) {
+                        if(!videoEncoder) {
                             log.retire(session,codec);session=null;
                         }
                         if(session!=null)log.capture(session,"MediaCodec.configure.attempt",requested.describe());
@@ -82,6 +92,7 @@ public final class EncodingHooks {
                     }
                     if(configure&&session!=null&&requested!=null) {
                         log.configured(session,codec,requested);
+                        synchronized(liveCodecs) { if(liveCodecs.size()<16)liveCodecs.put(codec,Boolean.TRUE); }
                     }
                     if(parameterValues!=null)log.event(session,codec,"setParameters accepted raw={"+parameterValues+"}");
                     if(output&&result instanceof MediaFormat)log.format(session,codec,read((MediaFormat)result),true,"MediaCodec."+name);
@@ -93,7 +104,7 @@ public final class EncodingHooks {
                     if(dequeue&&result instanceof Integer&&(Integer)result>=0)buffer(session,codec,(MediaCodec.BufferInfo)chain.getArg(0));
                     if(dequeue&&session!=null&&Integer.valueOf(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED).equals(result))
                         log.format(session,codec,read(((MediaCodec)codec).getOutputFormat()),true,"INFO_OUTPUT_FORMAT_CHANGED");
-                    if(terminal) { log.event(session,codec,name);log.retire(session,codec); }
+                    if(terminal) { log.event(session,codec,name);log.retire(session,codec);liveCodecs.remove(codec); }
                 } catch(Throwable ignored) {}
                 return result;
             });installed++; }
@@ -104,6 +115,7 @@ public final class EncodingHooks {
 
     public void inspect(Class<?> type) {
         if(!HookPolicy.captureClass(type.getName()))return;
+        installOverrides(type);
         boolean config=CaptureConfigReader.videoConfig(type);
         if(!type.isInterface()&&!type.getName().contains("$"))
             for(Constructor<?> constructor:type.getDeclaredConstructors())installCapture(constructor,config);
@@ -157,6 +169,78 @@ public final class EncodingHooks {
             } finally { if(previous==null)context.remove();else context.set(previous); }
         }); }
         catch(Throwable error) { hooked.remove(executable);frames.report("ENCODING capture hook unavailable "+executable.getDeclaringClass().getSimpleName()+" "+error.getClass().getSimpleName()); }
+    }
+    /** Rewrites the bitrate / frame-rate keys of a vehicle encoder's MediaFormat; returns whether anything changed. */
+    private boolean override(MediaFormat format) {
+        EncoderOverride override=frames.encoderOverride();
+        if(format==null||!override.active()||log.active()==null)return false;
+        try {
+            if(override.overridesBitrate())format.setInteger(MediaFormat.KEY_BIT_RATE,override.bitrateBps());
+            if(override.overridesFps())format.setInteger(MediaFormat.KEY_FRAME_RATE,override.fps());
+            frames.report("OVERRIDE MediaCodec.configure "+override.describe());
+            return true;
+        } catch(RuntimeException e) { frames.report("OVERRIDE configure failed "+e.getClass().getSimpleName());return false; }
+    }
+    /** Live bitrate change for the encoders of the running vehicle session; the frame rate follows through the loop interval hook. */
+    private void apply(EncoderOverride override) {
+        if(log.active()==null)return;
+        List<Object> codecs;synchronized(liveCodecs) { codecs=new ArrayList<>(liveCodecs.keySet()); }
+        for(Object codec:codecs) {
+            if(!(codec instanceof MediaCodec)||log.owner(codec)==null)continue;
+            try {
+                Bundle parameters=new Bundle();
+                if(override.overridesBitrate())parameters.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE,override.bitrateBps());
+                if(parameters.isEmpty())continue;
+                ((MediaCodec)codec).setParameters(parameters);
+                frames.report("OVERRIDE live "+override.describe());
+            } catch(Throwable e) { frames.report("OVERRIDE live failed "+e.getClass().getSimpleName()); }
+        }
+    }
+    /**
+     * VideoConfig getters feed every Ninebot encoder; the loop interval getter paces the bitmap encoder each iteration; the FFmpeg
+     * recorder setters are the last word for the h264_mediacodec / mjpeg / mpeg2 path, including the rebuilds Ninebot performs when the
+     * dashboard asks for another rate through RTCP.
+     */
+    private void installOverrides(Class<?> type) {
+        String name=type.getName();
+        boolean config=CaptureConfigReader.videoConfig(type),loop=name.equals("cn.ninebot.capture.encoder.LoopBitmapEncoder");
+        boolean recorder=name.equals("cn.ninebot.capture.mpeg2.NbFFmpegFrameRecorder");
+        if(!config&&!loop&&!recorder)return;
+        // The recorder setters are declared by its javacv superclass; hooking them there covers every recorder instance.
+        List<Method> methods=new ArrayList<>(Arrays.asList(type.getDeclaredMethods()));
+        if(recorder)for(Class<?> parent=type.getSuperclass();parent!=null&&parent!=Object.class;parent=parent.getSuperclass())methods.addAll(Arrays.asList(parent.getDeclaredMethods()));
+        for(Method method:methods) {
+            if(Modifier.isStatic(method.getModifiers())||method.isSynthetic()||Modifier.isAbstract(method.getModifiers()))continue;
+            String getter=method.getName();Class<?>[] types=method.getParameterTypes();
+            int found=0;
+            if(types.length==0)found=config&&getter.equals("getVideoBitrate")?1:config&&getter.equals("getFrameRate")?2:loop&&getter.equals("getMInterval")?3:0;
+            else if(types.length==1&&recorder)found=getter.equals("setVideoBitrate")&&types[0]==int.class?4:getter.equals("setFrameRate")&&types[0]==double.class?5:0;
+            final int kind=found;
+            if(kind==0||!hooked.add(method))continue;
+            try { module.hook(method).intercept(chain->{
+                if(kind>=4) {
+                    try {
+                        EncoderOverride override=frames.encoderOverride();
+                        if(override.active()&&log.active()!=null) {
+                            Object[] args=chain.getArgs().toArray();
+                            if(kind==4&&override.overridesBitrate()&&!Integer.valueOf(override.bitrateBps()).equals(args[0])) { frames.report("OVERRIDE recorder bitrate "+args[0]+" -> "+override.bitrateBps());args[0]=Integer.valueOf(override.bitrateBps());return chain.proceed(args); }
+                            if(kind==5&&override.overridesFps()&&!Double.valueOf(override.fps()).equals(args[0])) { frames.report("OVERRIDE recorder fps "+args[0]+" -> "+override.fps());args[0]=Double.valueOf(override.fps());return chain.proceed(args); }
+                        }
+                    } catch(RuntimeException ignored) {}
+                    return chain.proceed();
+                }
+                Object result=chain.proceed();
+                try {
+                    EncoderOverride override=frames.encoderOverride();
+                    if(!override.active()||log.active()==null)return result;
+                    if(kind==1&&override.overridesBitrate())return Integer.valueOf(override.bitrateBps());
+                    if(kind==2&&override.overridesFps())return Double.valueOf(override.fps());
+                    if(kind==3&&override.overridesFps())return Integer.valueOf(override.intervalMs());
+                } catch(RuntimeException ignored) {}
+                return result;
+            }); frames.report("OVERRIDE hook "+type.getSimpleName()+"."+getter); }
+            catch(Throwable e) { hooked.remove(method);frames.report("OVERRIDE hook unavailable "+getter+" "+e.getClass().getSimpleName()); }
+        }
     }
     private EncodingDiagnostics.Session captureSession() {
         Scope scoped=context.get();

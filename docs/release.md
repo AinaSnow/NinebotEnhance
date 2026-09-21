@@ -7,7 +7,7 @@ Ninebot Enhance 的首个发布版本为 **1.0.0**，Git 发布标签为 `v1.0.0
 - 项目名：`Ninebot Enhance`。
 - 包名：`dev.ichinomiya.ninebotenhance`。
 - `version.properties` 与 `ipc/Protocol.java` 中的版本名称、版本代码必须一致，构建脚本会自动核对。
-- 当前开发版本为 `1.0.1`，Android `versionCode=36`，使用原签名覆盖安装。当前修改等待设备测试确认，尚未提交或推送；确认后再提交到 GitHub。版本代码是单调递增的安装标识，不是发布次数。
+- 当前发布版本为 `1.0.2`，Android `versionCode=37`，使用原签名覆盖安装；它带来大灯控制、手机导航上仪表、仪表主题、寄存器探测等新功能，并放行九号出行 6.10.11。版本代码是单调递增的安装标识，不是发布次数。
 - 发布使用固定签名，公开 SHA-256 指纹保存在 `release-signing-certificate.txt`。
 - 私钥与密码保存在 Git 忽略的 `signing/`，后续更新继续使用同一密钥。
 

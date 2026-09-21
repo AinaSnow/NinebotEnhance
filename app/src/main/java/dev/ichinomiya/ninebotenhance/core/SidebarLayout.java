@@ -8,7 +8,7 @@ public final class SidebarLayout {
     /** Second column just left of the first, for cards the dashboard's top-right instrument would otherwise hide. */
     public static final float LEFT_COLUMN_RIGHT=LEFT-2.5f*GAP,LEFT_COLUMN_LEFT=LEFT_COLUMN_RIGHT-WIDTH;
     /** The music card matches the chart cards in height. */
-    public static final float PHONE_HEIGHT=28,MUSIC_HEIGHT=84,TYRE_HEIGHT=28,VOLTAGE_HEIGHT=28,VOLTAGE_CHART_HEIGHT=84;
+    public static final float PHONE_HEIGHT=28,MUSIC_HEIGHT=84,TYRE_HEIGHT=28,VOLTAGE_HEIGHT=28,VOLTAGE_CHART_HEIGHT=84,LAMP_HEIGHT=28;
     public static final float NOTIFICATION_HEIGHT=60;
     public record Box(float left,float top,float right,float bottom){
         public float height(){return bottom-top;}
@@ -20,23 +20,25 @@ public final class SidebarLayout {
      * Cards of both columns (null when switched off or hidden) plus where the notification block sits: its bottom edge, and whether
      * the hill-hold dodge moved it left of the toast.
      */
-    public record Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power,float notificationBottom,boolean notificationDodged){
-        public Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power){this(phone,music,voltage,tyres,speed,power,BOTTOM,false);}
-        public Stack shifted(float dy){return dy==0?this:new Stack(shift(phone,dy),shift(music,dy),shift(voltage,dy),shift(tyres,dy),shift(speed,dy),shift(power,dy),notificationBottom,notificationDodged);}
+    public record Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power,Box lamp,float notificationBottom,boolean notificationDodged){
+        public Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power){this(phone,music,voltage,tyres,speed,power,null,BOTTOM,false);}
+        public Stack shifted(float dy){return dy==0?this:new Stack(shift(phone,dy),shift(music,dy),shift(voltage,dy),shift(tyres,dy),shift(speed,dy),shift(power,dy),shift(lamp,dy),notificationBottom,notificationDodged);}
         private static Box shift(Box box,float dy){return box==null?null:box.shifted(dy);}
         /** Box of the card for a widget flag; null when absent. */
         public Box of(int widget){
-            return switch(widget){case WidgetSettings.PHONE->phone;case WidgetSettings.MUSIC->music;case WidgetSettings.TYRES->tyres;case WidgetSettings.VOLTAGE->voltage;case WidgetSettings.SPEED->speed;case WidgetSettings.POWER->power;default->null;};
+            return switch(widget){case WidgetSettings.PHONE->phone;case WidgetSettings.MUSIC->music;case WidgetSettings.TYRES->tyres;case WidgetSettings.VOLTAGE->voltage;case WidgetSettings.SPEED->speed;case WidgetSettings.POWER->power;case WidgetSettings.LAMP->lamp;default->null;};
         }
     }
     /** Content widths measured by the renderer; music and tyres are fixed to the sidebar width, the metric cards use template widths without their charts. */
-    public record Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth){
-        public Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth){this(phoneWidth,musicWidth,voltageWidth,tyreWidth,WIDTH,WIDTH);}
+    public record Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth,float lampWidth){
+        public Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth){this(phoneWidth,musicWidth,voltageWidth,tyreWidth,WIDTH,WIDTH,WIDTH);}
+        public Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth){this(phoneWidth,musicWidth,voltageWidth,tyreWidth,speedWidth,powerWidth,WIDTH);}
     }
     /** Vertical volume bar above the dashboard speaker icon at the lower left; outside the columns and display only. */
     public static final Box VOLUME=new Box(14,150,46,376);
-    /** The dashboard's own instrument card at the top right; right-column cards reaching into it move to the left column. */
+    /** Calibrated fallback for the dashboard's own instrument card at the top right; the cast configuration's bound rectangles replace it when read. */
     public static final Box INSTRUMENT=new Box(640,44,842,254);
+    public static final List<Box> DEFAULT_OCCLUSIONS=List.of(INSTRUMENT);
     /** Dashboard toast "拧动油门解除坡道驻车" shown while hill hold is engaged, measured from a dashboard photo of the grid. */
     public static final Box HILL_HOLD_TOAST=new Box(574,372,848,462);
     /** Voltage, speed and power cards share one size: a single row, or a row plus a chart. */
@@ -59,6 +61,7 @@ public final class SidebarLayout {
         if(!phoneAvailable)visible&=~WidgetSettings.PHONE;if(!musicVisible)visible&=~WidgetSettings.MUSIC;if(!settings.showsTyres())visible&=~WidgetSettings.TYRES;
         return arrange(settings,visible,notificationHeight,sizes,dodge);
     }
+    public static Stack arrange(WidgetSettings settings,int visible,float notificationHeight,Sizes sizes,boolean dodge){return arrange(settings,visible,notificationHeight,sizes,dodge,DEFAULT_OCCLUSIONS);}
     /**
      * Right column: cards stack bottom up in the configured order; the notification block takes its own slot with the given height
      * (0 while empty), so cards ordered below it keep their place. With dodge on, every card the hill-hold toast covers (judged at
@@ -66,9 +69,10 @@ public final class SidebarLayout {
      * covered notification block is flagged so the renderer slides it left too, an uncovered one restacks like a card.
      * Left column: its cards stack bottom up from the bottom edge, but always above the notification block (whose cards reach into
      * that column), above the toast and above every card the dodge pushed out of the right column. Right-column cards that would
-     * reach into the dashboard instrument join the left column, each slotted among its cards by height, until the column is short enough again.
+     * reach into a dashboard occlusion (the instrument card by default, the configuration's bound rectangles when read) join the
+     * left column, each slotted among its cards by height, until the column is short enough again.
      */
-    public static Stack arrange(WidgetSettings settings,int visible,float notificationHeight,Sizes sizes,boolean dodge){
+    public static Stack arrange(WidgetSettings settings,int visible,float notificationHeight,Sizes sizes,boolean dodge,List<Box> occlusions){
         float lift=Math.max(0,notificationHeight),bottom=BOTTOM,notificationBottom=BOTTOM,leftBottom=BOTTOM;
         LinkedHashMap<Integer,Box> placed=new LinkedHashMap<>();
         List<Integer> right=settings.rightOrder(),left=settings.leftOrder();
@@ -94,26 +98,29 @@ public final class SidebarLayout {
         for(int w:left){if((visible&w)==0)continue;Box card=box(probe,height(settings,w),width(sizes,w),WIDTH,LEFT_COLUMN_RIGHT);leftCards.add(w);reference.add(card);probe=card.top()-GAP;}
         // Overflow: a right-column card under the instrument is inserted above every left card that sits lower than it did.
         for(int w:right){
-            Box card=placed.get(w);if(card==null||card.right()!=RIGHT||card.top()>=INSTRUMENT.bottom())continue;
+            Box card=placed.get(w);if(card==null||card.right()!=RIGHT||!intersectsAny(card,occlusions))continue;
             float center=(card.top()+card.bottom())/2;int index=0;for(Box other:reference)if((other.top()+other.bottom())/2>center)index++;
             leftCards.add(index,w);reference.add(index,card);placed.remove(w);
         }
         for(int w:leftCards){Box card=box(leftBottom,height(settings,w),width(sizes,w),WIDTH,LEFT_COLUMN_RIGHT);placed.put(w,card);leftBottom=card.top()-GAP;}
-        return new Stack(placed.get(WidgetSettings.PHONE),placed.get(WidgetSettings.MUSIC),placed.get(WidgetSettings.VOLTAGE),placed.get(WidgetSettings.TYRES),placed.get(WidgetSettings.SPEED),placed.get(WidgetSettings.POWER),notificationBottom,dodged);
+        return new Stack(placed.get(WidgetSettings.PHONE),placed.get(WidgetSettings.MUSIC),placed.get(WidgetSettings.VOLTAGE),placed.get(WidgetSettings.TYRES),placed.get(WidgetSettings.SPEED),placed.get(WidgetSettings.POWER),placed.get(WidgetSettings.LAMP),notificationBottom,dodged);
     }
     private static float height(WidgetSettings s,int widget){
         return switch(widget){
             case WidgetSettings.PHONE->PHONE_HEIGHT;case WidgetSettings.MUSIC->MUSIC_HEIGHT;case WidgetSettings.TYRES->TYRE_HEIGHT;
             case WidgetSettings.VOLTAGE->metricHeight(s.enabled(WidgetSettings.VOLTAGE_CHART));case WidgetSettings.SPEED->metricHeight(s.enabled(WidgetSettings.SPEED_CHART));
-            case WidgetSettings.POWER->metricHeight(s.enabled(WidgetSettings.POWER_CHART));default->0;
+            case WidgetSettings.POWER->metricHeight(s.enabled(WidgetSettings.POWER_CHART));case WidgetSettings.LAMP->LAMP_HEIGHT;default->0;
         };
     }
     private static float width(Sizes z,int widget){
         return switch(widget){
             case WidgetSettings.PHONE->z.phoneWidth();case WidgetSettings.MUSIC->z.musicWidth();case WidgetSettings.TYRES->z.tyreWidth();
-            case WidgetSettings.VOLTAGE->z.voltageWidth();case WidgetSettings.SPEED->z.speedWidth();case WidgetSettings.POWER->z.powerWidth();default->WIDTH;
+            case WidgetSettings.VOLTAGE->z.voltageWidth();case WidgetSettings.SPEED->z.speedWidth();case WidgetSettings.POWER->z.powerWidth();case WidgetSettings.LAMP->z.lampWidth();default->WIDTH;
         };
     }
+    /** Strict overlap: boxes that only share an edge do not intersect. */
+    public static boolean intersects(Box a,Box b){return a!=null&&b!=null&&a.left()<b.right()&&b.left()<a.right()&&a.top()<b.bottom()&&b.top()<a.bottom();}
+    public static boolean intersectsAny(Box card,List<Box> boxes){if(boxes!=null)for(Box b:boxes)if(intersects(card,b))return true;return false;}
     /** Whether a card at this position lies under the hill-hold toast. */
     public static boolean covered(Box card){return card!=null&&card.top()<HILL_HOLD_TOAST.bottom()&&card.bottom()>HILL_HOLD_TOAST.top()&&card.right()>HILL_HOLD_TOAST.left();}
     /** Horizontal shift that puts a right-aligned card or notification just left of the hill-hold toast. */

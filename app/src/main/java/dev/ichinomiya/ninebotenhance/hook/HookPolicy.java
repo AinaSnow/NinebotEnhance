@@ -7,7 +7,7 @@ public final class HookPolicy {
                 && !name.endsWith("BuildConfig");
     }
     public static boolean interestingClass(String name) {
-        return captureClass(name) || name.equals("cn.ninebot.device.motor.thirdparts.TirePressureStateParser")
+        return captureClass(name) || StatisticsHooks.interesting(name) || FeatureHooks.interesting(name) || name.equals("cn.ninebot.device.motor.thirdparts.TirePressureStateParser")
                 || name.equals("cn.ninebot.device.DeviceManager") || name.equals("cn.ninebot.library.bluetooth.dynamic.DynamicDevice")
                 || name.equals("cn.ninebot.mapcapture.DeviceScreenCastManager")
                 || name.startsWith("cn.ninebot.mapcapture.DeviceScreenCastManager$")

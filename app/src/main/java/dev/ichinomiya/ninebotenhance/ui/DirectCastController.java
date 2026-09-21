@@ -42,6 +42,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
     public DirectCastController(FrameClient frames, BooleanSupplier compatible) {
         this.frames = frames; this.compatible = compatible;
         injector = new VehicleCardInjector(this, frames);
+        frames.setDynamicPageListener(this::rescanCards);
     }
     public void attach(Application application) { if (applications.add(application)) application.registerActivityLifecycleCallbacks(this); }
     public void inflated(int id, View view) {
@@ -86,6 +87,10 @@ public final class DirectCastController implements Application.ActivityLifecycle
         } catch (RuntimeException e) { end(request, true, "巡航启动失败：" + Ipc.error(e)); return; }
         injector.scan(card);
         waitVehicle(request, SystemClock.elapsedRealtime() + 90000);
+    }
+    /** Re-runs the card injector on every live vehicle card, e.g. after the page factory or an unlock changed. */
+    public void rescanCards() {
+        for (View card : new ArrayList<>(entryStates.keySet())) if (card != null && card.isAttachedToWindow()) injector.scan(card);
     }
     private View attachedCard(Activity activity) {
         if (activity == null) return null;
@@ -382,9 +387,22 @@ public final class DirectCastController implements Application.ActivityLifecycle
             layout.addView(autostart, autostartParams);
             if (!frames.serviceConnected()) connection.setText(frames.serviceStatus());
         }
-        LinearLayout.LayoutParams widgetParams = new LinearLayout.LayoutParams(-1, -2); widgetParams.topMargin = MirrorUi.dp(activity, 12);
-        Button widgets=new Button(activity);widgets.setText("控件管理");theme.button(widgets,null);layout.addView(widgets,widgetParams);
+        LinearLayout tools = new LinearLayout(activity);
+        LinearLayout.LayoutParams toolsParams = new LinearLayout.LayoutParams(-1, -2); toolsParams.topMargin = MirrorUi.dp(activity, 12);
+        Button widgets=new Button(activity);widgets.setText("控件管理");
+        Button encoder=new Button(activity);encoder.setText("编码覆盖");
+        Button hidden=new Button(activity);hidden.setText("隐藏功能");
+        Button lamp=new Button(activity);lamp.setText("大灯控制");
+        for (Button tool : new Button[]{widgets, encoder, hidden, lamp}) {
+            theme.button(tool, null); tool.setTextSize(13); tool.setMaxLines(1); tool.setPadding(MirrorUi.dp(activity, 4), tool.getPaddingTop(), MirrorUi.dp(activity, 4), tool.getPaddingBottom());
+            LinearLayout.LayoutParams toolParams = new LinearLayout.LayoutParams(0, -2, 1); if (tools.getChildCount() > 0) toolParams.setMarginStart(MirrorUi.dp(activity, 8));
+            tools.addView(tool, toolParams);
+        }
+        layout.addView(tools, toolsParams);
         widgets.setOnClickListener(v->WidgetSettingsDialog.show(activity,frames,card));
+        encoder.setOnClickListener(v->EncoderOverrideDialog.show(activity,frames,card));
+        hidden.setOnClickListener(v->HiddenFeatureDialog.show(activity,frames,card));
+        lamp.setOnClickListener(v->frames.lampSettings(activity,theme.dark));
         TextView appLabel = new TextView(activity); appLabel.setText("启动应用"); appLabel.setTextColor(theme.secondary); appLabel.setPadding(0, pad / 2, 0, pad / 3); layout.addView(appLabel);
         ChoiceSpinner appPicker = new ChoiceSpinner(activity, theme, "选择启动应用");
         ArrayList<Bundle> apps = new ArrayList<>();
@@ -392,16 +410,26 @@ public final class DirectCastController implements Application.ActivityLifecycle
         appPicker.setAdapter(appNames); appPicker.setEnabled(false);
         appPicker.setBackground(theme.background(activity, theme.input, 14, false)); appPicker.setClipToOutline(true);
         layout.addView(appPicker, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout dimensions=fieldRow(activity,layout),virtualDimensions=fieldRow(activity,layout),options=fieldRow(activity,layout);
+        LinearLayout dimensions=fieldRow(activity,layout),virtualDimensions=fieldRow(activity,layout),options=fieldRow(activity,layout),dpiColumn=fieldColumn(activity,options);
         EditText width=field(activity,fieldColumn(activity,dimensions),"整帧宽度",cached.width,theme),
                 height=field(activity,fieldColumn(activity,dimensions),"整帧高度",cached.height,theme),
                 virtualWidth=field(activity,fieldColumn(activity,virtualDimensions),"虚拟屏宽度",cached.virtualWidth,theme),
                 virtualHeight=field(activity,fieldColumn(activity,virtualDimensions),"虚拟屏高度",cached.virtualHeight,theme),
-                dpi=field(activity,fieldColumn(activity,options),"DPI",cached.dpi,theme);
+                dpi=field(activity,dpiColumn,"DPI",cached.dpi,theme);
+        // The frame follows the vehicle's cast configuration; the fields stay for the read-back text but are never shown.
+        dimensions.setVisibility(View.GONE);
         LinearLayout colorColumn = fieldColumn(activity, options);
-        fieldLabel(activity, colorColumn, "背景颜色", theme);
+        fieldLabel(activity, colorColumn, "深色背景", theme);
         BandColorButton topColor = new BandColorButton(activity, theme, cached.backgroundColor);
         colorColumn.addView(topColor, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout lightColumn = fieldColumn(activity, options);
+        fieldLabel(activity, lightColumn, "浅色背景", theme);
+        BandColorButton lightColor = new BandColorButton(activity, theme, cached.lightBackgroundColor);
+        lightColumn.addView(lightColor, new LinearLayout.LayoutParams(-1, -2));
+        android.widget.CheckBox keepDpi=new android.widget.CheckBox(activity);keepDpi.setText("保持 DPI");keepDpi.setTextColor(theme.text);keepDpi.setTextSize(15);
+        keepDpi.setButtonTintList(android.content.res.ColorStateList.valueOf(theme.accent));keepDpi.setChecked(cached.keepPhoneDpi);
+        keepDpi.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);keepDpi.setIncludeFontPadding(false);keepDpi.setPadding(0,MirrorUi.dp(activity,8),0,MirrorUi.dp(activity,8));
+        layout.addView(keepDpi,new LinearLayout.LayoutParams(-1,-2));
         LinearLayout actions = new LinearLayout(activity); actions.setGravity(Gravity.CENTER_VERTICAL); actions.setBaselineAligned(false);
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-1, -2); actionParams.topMargin = pad / 2;
         layout.addView(actions, actionParams);
@@ -430,22 +458,22 @@ public final class DirectCastController implements Application.ActivityLifecycle
         boolean[] loaded = {false};
         Runnable showMode = () -> {
             boolean virtual = frames.cachedPrivilege().usesVirtualDisplay();
-            for (View field : new View[]{appLabel,appPicker,dimensions,virtualDimensions,options,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
+            for (View field : new View[]{appLabel,appPicker,virtualDimensions,options,keepDpi,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
             retryParams.setMarginEnd(virtual ? MirrorUi.dp(activity, 12) : 0); retry.setLayoutParams(retryParams);
         };
         showMode.run();
         Runnable read = () -> {
             loaded[0] = false; save.setEnabled(false); retry.setEnabled(false); appPicker.setEnabled(false); local.setEnabled(session.isLocal());
             String w=width.getText().toString(),h=height.getText().toString(),d=dpi.getText().toString(),vw=virtualWidth.getText().toString(),vh=virtualHeight.getText().toString();
-            int color = topColor.color();
+            int color = topColor.color(), light = lightColor.color(); boolean keep = keepDpi.isChecked();
             connection.setText("正在读取已保存参数；当前显示缓存或未保存的输入。");
             frames.getSettings(config -> {
                 if (!usable(activity) || !dialog.isShowing()) return;
                 DisplaySettings value = Ipc.settings(config);
                 boolean edited = !w.equals(width.getText().toString()) || !h.equals(height.getText().toString()) || !d.equals(dpi.getText().toString())
-                        ||!vw.equals(virtualWidth.getText().toString())||!vh.equals(virtualHeight.getText().toString())||color!=topColor.color();
+                        ||!vw.equals(virtualWidth.getText().toString())||!vh.equals(virtualHeight.getText().toString())||color!=topColor.color()||light!=lightColor.color()||keep!=keepDpi.isChecked();
                 if (!edited) { width.setText(String.valueOf(value.width)); height.setText(String.valueOf(value.height)); dpi.setText(String.valueOf(value.dpi));
-                    virtualWidth.setText(String.valueOf(value.virtualWidth));virtualHeight.setText(String.valueOf(value.virtualHeight));topColor.setBandColor(value.backgroundColor); }
+                    virtualWidth.setText(String.valueOf(value.virtualWidth));virtualHeight.setText(String.valueOf(value.virtualHeight));topColor.setBandColor(value.backgroundColor);lightColor.setBandColor(value.lightBackgroundColor);keepDpi.setChecked(value.keepPhoneDpi); }
                 ArrayList<Bundle> catalog = config.getParcelableArrayList(AppCatalog.APPS, Bundle.class);
                 String selected = config.getString(AppCatalog.SELECTED, "");
                 apps.clear(); apps.add(null);
@@ -458,10 +486,10 @@ public final class DirectCastController implements Application.ActivityLifecycle
                 boolean idle = session.phase() == DirectSession.Phase.IDLE;
                 loaded[0] = true; retry.setEnabled(true); save.setEnabled(idle);
                 appPicker.setEnabled(idle); local.setEnabled(session.isLocal() || idle);
-                width.setEnabled(idle);height.setEnabled(idle);dpi.setEnabled(idle);virtualWidth.setEnabled(idle);virtualHeight.setEnabled(idle);topColor.setEnabled(idle);
+                width.setEnabled(idle);height.setEnabled(idle);dpi.setEnabled(idle);virtualWidth.setEnabled(idle);virtualHeight.setEnabled(idle);topColor.setEnabled(idle);lightColor.setEnabled(idle);keepDpi.setEnabled(idle);
                 showMode.run();
                 connection.setText(!frames.cachedPrivilege().usesVirtualDisplay() ? "当前方式：无（投屏）。\n开始时通过系统窗口选择单个应用或整个屏幕。"
-                        : "已读取: 整帧 "+value.width+" × "+value.height+"，虚拟屏 "+value.virtualWidth+" × "+value.virtualHeight+"，"+value.dpi+" DPI。"+(edited?"\n保留你刚输入的内容。":"")
+                        : "已读取: 整帧 "+value.width+" × "+value.height+"，虚拟屏 "+value.virtualWidth+" × "+value.virtualHeight+"，"+value.dpi+" DPI"+(value.keepPhoneDpi?"，保持手机 DPI":"")+"。"+(edited?"\n保留你刚输入的内容。":"")
                         + (apps.size() == 1 ? "\n请选择启动应用并允许读取应用列表。" : selectedIndex == 0
                             ? (selected.isEmpty() ? "\n请先选择启动应用。" : "\n原应用入口已不可用，请重新选择。") : "")
                         + (idle ? "" : "\n请先停止投屏再修改。")
@@ -499,11 +527,11 @@ public final class DirectCastController implements Application.ActivityLifecycle
             if (index <= 0 || index >= apps.size()) { toast(activity, "请先选择启动应用"); return; }
             String selected = apps.get(index).getString("component");
             try {
-                DisplaySettings next = new DisplaySettings(Integer.parseInt(width.getText().toString().trim()),
-                        Integer.parseInt(height.getText().toString().trim()),Integer.parseInt(virtualWidth.getText().toString().trim()),
-                        Integer.parseInt(virtualHeight.getText().toString().trim()),Integer.parseInt(dpi.getText().toString().trim()),topColor.color());
+                DisplaySettings next = new DisplaySettings(frames.frameWidth(),
+                        frames.frameHeight(),Integer.parseInt(virtualWidth.getText().toString().trim()),
+                        Integer.parseInt(virtualHeight.getText().toString().trim()),Integer.parseInt(dpi.getText().toString().trim()),topColor.color(),keepDpi.isChecked(),lightColor.color());
                 save.setEnabled(false); retry.setEnabled(false); local.setEnabled(false); appPicker.setEnabled(false);
-                width.setEnabled(false);height.setEnabled(false);dpi.setEnabled(false);virtualWidth.setEnabled(false);virtualHeight.setEnabled(false);topColor.setEnabled(false);connection.setText("正在保存…");
+                width.setEnabled(false);height.setEnabled(false);dpi.setEnabled(false);virtualWidth.setEnabled(false);virtualHeight.setEnabled(false);topColor.setEnabled(false);lightColor.setEnabled(false);keepDpi.setEnabled(false);connection.setText("正在保存…");
                 frames.saveSettings(next, selected, error -> {
                     if (!usable(activity) || !dialog.isShowing()) return;
                     if (error == null) {
@@ -511,7 +539,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
                         if (startAfter) startLocal(activity, card); else toast(activity, "启动应用和显示参数已保存");
                     } else {
                         loaded[0] = false; retry.setEnabled(true); local.setEnabled(session.isLocal());
-                        width.setEnabled(true);height.setEnabled(true);dpi.setEnabled(true);virtualWidth.setEnabled(true);virtualHeight.setEnabled(true);topColor.setEnabled(true);
+                        width.setEnabled(true);height.setEnabled(true);dpi.setEnabled(true);virtualWidth.setEnabled(true);virtualHeight.setEnabled(true);topColor.setEnabled(true);lightColor.setEnabled(true);keepDpi.setEnabled(true);
                         connection.setText(error + "\n请重新读取后再保存。");
                     }
                 });

@@ -276,6 +276,15 @@ public final class HudSmoke {
         hud.setWidgets(WidgetSettings.DEFAULT.withCondition(WidgetSettings.NOTIFICATIONS,new WidgetCondition(WidgetCondition.WHILE,0,5,WidgetCondition.PLAYING,0,100,0,3000,20,100,0,100)));
         Bundle pausedCond=state(1,event(1,905000));pausedCond.getBundle("music").putInt("state",2);hud.accept("cond",pausedCond,907000);
         check(hud.stack(907000).phone().bottom()==468&&hud.summary(907000).contains("visible=1")&&frame(hud,907000).getPixel(700,436)==BACKGROUND,"notifications gated on playing music are held back while it is paused: the card stays queued, nothing is drawn where it would sit and the column is not lifted");
+        // Light dashboard theme: the same data on the light palette, appended below the dark comparison image.
+        DashboardHud light=new DashboardHud();light.reset("light");light.setDark(false);light.acceptTires(tireState());light.acceptBattery(batteryState());
+        light.accept("light",state(0),100000);light.simulate(100300);light.simulate(100350);light.stack(100400);light.stack(101000);
+        Bitmap lightFrame=Bitmap.createBitmap(848,480,Bitmap.Config.ARGB_8888);Canvas lightCanvas=new Canvas(lightFrame);lightCanvas.drawColor(0xffe6eaee);light.draw(lightCanvas,848,480,101500);
+        var lightStack=light.stack(101500);int lightSurface=lightFrame.getPixel((int)lightStack.music().right()-4,(int)lightStack.music().top()+32);
+        check(!light.dark()&&Color.red(lightSurface)>230&&Color.green(lightSurface)>230&&Color.blue(lightSurface)>230,"light theme paints cards on a near-white surface, got #"+Integer.toHexString(lightSurface)+" box="+lightStack.music()+" notifications="+light.summary(101500));
+        Bitmap darkImage=android.graphics.BitmapFactory.decodeFile(args[0]);Bitmap both=Bitmap.createBitmap(848,darkImage.getHeight()+480,Bitmap.Config.ARGB_8888);
+        Canvas bothCanvas=new Canvas(both);bothCanvas.drawBitmap(darkImage,0,0,null);bothCanvas.drawBitmap(lightFrame,0,darkImage.getHeight(),null);
+        try(FileOutputStream out=new FileOutputStream(args[0])){both.compress(Bitmap.CompressFormat.PNG,100,out);}
         System.out.println("PASS: "+checks+" Android HUD checks");
     }
 }

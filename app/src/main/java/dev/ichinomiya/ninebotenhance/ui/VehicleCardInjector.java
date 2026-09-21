@@ -1,6 +1,7 @@
 package dev.ichinomiya.ninebotenhance.ui;
 
 import dev.ichinomiya.ninebotenhance.client.FrameClient;
+import dev.ichinomiya.ninebotenhance.core.HiddenFeatures;
 import dev.ichinomiya.ninebotenhance.ui.DirectCastController;
 import dev.ichinomiya.ninebotenhance.ui.MirrorUi;
 
@@ -15,9 +16,10 @@ import java.util.ArrayDeque;
 import java.util.WeakHashMap;
 import java.util.regex.Pattern;
 
-/** Exact 6.10.10 card structure recovered from layout_detail_navigation_card (res/0oW.xml). */
+/** Exact card structure recovered from layout_detail_navigation_card (res/0oW.xml); identical in 6.10.10 and 6.10.11. */
 public final class VehicleCardInjector {
     private static final String MARKER = "dev.ichinomiya.ninebotenhance.direct-button";
+    private static final String HARDKEY_MARKER = MARKER + ".hardkey";
     /** The ownership-days line at the bottom of the vehicle page; its text is data-driven, so it is matched by content. */
     private static final Pattern OWNERSHIP = Pattern.compile("拥有爱车");
     private final WeakHashMap<View, Boolean> ownershipLabels = new WeakHashMap<>();
@@ -48,7 +50,7 @@ public final class VehicleCardInjector {
         for (int i = 0; i < card.getChildCount(); i++) {
             View child = card.getChildAt(i);
             if (MARKER.equals(child.getTag()) && child instanceof LinearLayout) {
-                controller.decorate((Button)((LinearLayout)child).getChildAt(0), card); return;
+                controller.decorate((Button)((LinearLayout)child).getChildAt(0), card); hardkey(card, (LinearLayout)child); return;
             }
         }
         if (!card.getClass().getName().equals("androidx.constraintlayout.widget.ConstraintLayout")) return;
@@ -87,10 +89,45 @@ public final class VehicleCardInjector {
             history.setLayoutParams(historyParams); card.addView(row, buttonParams);
             controller.decorate(button, card);
             frames.report("DIRECT UI installed layout_detail_navigation_card below layoutHistory; " + entryInfo(card));
+            hardkey(card, row);
         } catch (ReflectiveOperationException | RuntimeException e) {
             if (row != null && row.getParent() == card) card.removeView(row);
             history.setLayoutParams(original);
             frames.report("DIRECT UI insertion failed " + e.getClass().getSimpleName());
+        }
+    }
+    /**
+     * Ninebot's own hard-key remote card (view type ext_meter_virtual_key) below the module row, built by the page's view factory
+     * with the page's device identity; removed again when the unlock is switched off. Taps on it are Ninebot's own commands.
+     */
+    private void hardkey(ViewGroup card, LinearLayout row) {
+        View existing = null;
+        for (int i = 0; i < card.getChildCount(); i++) if (HARDKEY_MARKER.equals(card.getChildAt(i).getTag())) existing = card.getChildAt(i);
+        boolean wanted = frames.hiddenFeatures().hardkey();
+        ViewGroup.LayoutParams rowParams = row.getLayoutParams(); Class<?> params = rowParams.getClass();
+        try {
+            if (!wanted) {
+                if (existing != null) { card.removeView(existing); set(params, rowParams, "bottomToBottom", 0); row.setLayoutParams(rowParams); frames.report("FEATURE hardkey card removed"); }
+                return;
+            }
+            if (existing != null) return;
+            FrameClient.DynamicViewFactory factory = frames.dynamicViewFactory();
+            if (factory == null) { frames.report("FEATURE hardkey card waits for the page factory"); return; }
+            View view = factory.create(card, HiddenFeatures.HARDKEY_TYPE, HiddenFeatures.HARDKEY_CONFIG);
+            // An unsupported type yields Ninebot's plain TextView placeholder; never mount that.
+            if (view == null || view.getClass() == android.widget.TextView.class) { frames.report("FEATURE hardkey card not built"); return; }
+            ViewGroup.MarginLayoutParams cardParams = (ViewGroup.MarginLayoutParams)params.getConstructor(int.class, int.class).newInstance(0, -2);
+            set(params, cardParams, "startToStart", 0); set(params, cardParams, "endToEnd", 0);
+            set(params, cardParams, "topToBottom", row.getId()); set(params, cardParams, "bottomToBottom", 0);
+            cardParams.topMargin = dp(card, 12);
+            if (view.getId() == View.NO_ID) view.setId(View.generateViewId());
+            view.setTag(HARDKEY_MARKER);
+            set(params, rowParams, "bottomToBottom", -1); row.setLayoutParams(rowParams);
+            card.addView(view, cardParams);
+            frames.report("FEATURE hardkey card installed " + view.getClass().getSimpleName());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            try { set(params, rowParams, "bottomToBottom", 0); row.setLayoutParams(rowParams); } catch (ReflectiveOperationException | RuntimeException ignored) {}
+            frames.report("FEATURE hardkey card failed " + e.getClass().getSimpleName());
         }
     }
     /** A second way into the settings: tapping the ownership-days line opens the same dialog as the card button. */

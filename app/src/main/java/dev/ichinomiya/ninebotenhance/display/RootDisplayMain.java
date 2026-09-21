@@ -1,6 +1,7 @@
 package dev.ichinomiya.ninebotenhance.display;
 
 import dev.ichinomiya.ninebotenhance.core.AppRecoveryState;
+import android.net.Uri;
 import dev.ichinomiya.ninebotenhance.core.DisplayInputTransform;
 import dev.ichinomiya.ninebotenhance.core.DisplaySettings;
 import dev.ichinomiya.ninebotenhance.core.FramePacer;
@@ -58,6 +59,9 @@ public final class RootDisplayMain {
     private Object taskManager;
     private Method getTasks;
     private long lastTaskError;
+    /** Route to request again once the app settled on the virtual display; null when nothing was being navigated. */
+    private String resumeUri;private int resumePolls;
+    private static final long RESUME_POLL_MS=500,RESUME_SETTLE_MS=2500;private static final int RESUME_POLLS=40;
 
     public static void main(String[] args) {
         if (args.length != 1 || !Protocol.validRequest(args[0])) System.exit(2);
@@ -161,6 +165,7 @@ public final class RootDisplayMain {
         displayId = display.getDisplay().getDisplayId();
         if (displayId <= 0) throw new IllegalStateException("系统返回了非独立显示器");
         log("DISPLAY created id=" + displayId + " buffer=" + settings.label() + " flags=0x" + Integer.toHexString(flags));
+        applyRenderPlan(manager);
         try {
             displayOrientation = new RootDisplayOrientation(display.getDisplay(), this::log);
             displayOrientation.start();
@@ -270,19 +275,63 @@ public final class RootDisplayMain {
         Intent intent = AppCatalog.launchIntent(context.getPackageManager(), component);
         // The reference uses NEW_TASK only. MULTIPLE_TASK can select a different app initialization path.
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        Bundle options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle();
-        Method start = Class.forName("android.app.IActivityManager").getMethod("startActivityAsUser",
-                Class.forName("android.app.IApplicationThread"), String.class, Intent.class, String.class,
-                IBinder.class, String.class, int.class, int.class, Class.forName("android.app.ProfilerInfo"), Bundle.class, int.class);
-        int result = (int)start.invoke(activityManager, null, "com.android.shell", intent, null, null, null, 0, 0, null, options, 0);
+        // Asked before the launch: moving the task relaunches the app and ends the phone navigation.
+        String resume = navigationResume(component.getPackageName());
+        int result = startOnDisplay(intent);
         if (result < 0) throw new IllegalStateException("应用无法在虚拟屏启动，系统返回 " + result);
         log("LAUNCH id=" + displayId + " entry=" + intent.getComponent().flattenToShortString()
-                + " flags=0x" + Integer.toHexString(intent.getFlags()) + " result=" + result);
+                + " flags=0x" + Integer.toHexString(intent.getFlags()) + " result=" + result + " resume=" + (resume != null));
         long generation = ++launchGeneration;
+        resumeUri = resume; resumePolls = 0; main.removeCallbacks(resumeWatch);
+        if (resume != null) main.postDelayed(resumeWatch, RESUME_POLL_MS);
         // Observe both the splash screen and the settled activity. No hooks in target apps.
         for (long delay : new long[]{800, 3500}) main.postDelayed(() -> {
             if (!stopped.get() && launchGeneration == generation) logDisplayState();
         }, delay);
+    }
+    private int startOnDisplay(Intent intent) throws Exception {
+        Bundle options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle();
+        Method start = Class.forName("android.app.IActivityManager").getMethod("startActivityAsUser",
+                Class.forName("android.app.IApplicationThread"), String.class, Intent.class, String.class,
+                IBinder.class, String.class, int.class, int.class, Class.forName("android.app.ProfilerInfo"), Bundle.class, int.class);
+        return (int)start.invoke(activityManager, null, "com.android.shell", intent, null, null, null, 0, 0, null, options, 0);
+    }
+    /**
+     * AMap's map activity is relaunched by the system when its task moves to the virtual display (density and touchscreen
+     * differ from the phone and are outside its configChanges), which destroys the navigation page. The module service knows
+     * the destination and travel mode of the navigation that was live; its public route-plan URI is sent to the app once it
+     * has settled on this display, so the same route is planned again there. Nothing else in the app is touched.
+     */
+    private String navigationResume(String pkg) {
+        try {
+            Bundle args = new Bundle(); args.putString("package", pkg);
+            Bundle reply = providerCall("navi_resume", args);
+            String uri = reply == null ? null : reply.getString("uri");
+            return uri == null || uri.isEmpty() ? null : uri;
+        } catch (Exception e) { log("NAVI RESUME query failed: " + Ipc.error(e)); return null; }
+    }
+    private final Runnable resumeWatch = new Runnable() {
+        @Override public void run() {
+            if (stopped.get() || resumeUri == null) return;
+            boolean occupied;
+            try { occupied = displayOccupied(); } catch (Exception e) { log("NAVI RESUME abandoned: " + Ipc.error(e)); resumeUri = null; return; }
+            if (!occupied) {
+                if (++resumePolls < RESUME_POLLS) main.postDelayed(this, RESUME_POLL_MS);
+                else { log("NAVI RESUME abandoned: app never settled on the display"); resumeUri = null; }
+                return;
+            }
+            main.postDelayed(RootDisplayMain.this::sendResume, RESUME_SETTLE_MS);
+        }
+    };
+    private void sendResume() {
+        String uri = resumeUri; resumeUri = null;
+        if (uri == null || stopped.get() || selectedApp == null) return;
+        try {
+            if (!displayOccupied()) { log("NAVI RESUME skipped: display empty"); return; }
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri)).setPackage(selectedApp.getPackageName()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            int result = startOnDisplay(intent);
+            log("NAVI RESUME id=" + displayId + " result=" + result + " " + uri.replaceAll("dname=[^&]*", "dname=…"));
+        } catch (Exception e) { log("NAVI RESUME failed: " + Ipc.error(e)); }
     }
     private java.util.List<?> displayTasks() throws Exception {
         if (displayId <= 0 || display == null || !display.getDisplay().isValid()) throw new IllegalStateException("虚拟屏已关闭");
@@ -392,7 +441,7 @@ public final class RootDisplayMain {
         release(); System.exit(0);
     }
     private void release() {
-        main.removeCallbacks(appWatch);
+        main.removeCallbacks(appWatch); main.removeCallbacks(resumeWatch); resumeUri = null;
         if (keyboard != null) keyboard.close();
         if (displayOrientation != null) displayOrientation.close();
         if (displayPower != null) displayPower.close();
@@ -401,6 +450,44 @@ public final class RootDisplayMain {
         if (surface != null) { surface.release(); surface = null; }
         try { Class.forName("android.app.IActivityManager").getMethod("removeContentProviderExternal", String.class, IBinder.class)
                 .invoke(activityManager, Protocol.ROOT_AUTHORITY, providerToken); } catch (Exception ignored) {}
+    }
+    /**
+     * "Keep DPI": the display renders at the phone's density with a proportionally larger logical size, so a navigation app
+     * moving between the phone and this display never sees a density change (AMap keeps one process-wide density and lays
+     * its pages out wrong after one). WindowManager's forced size and density change the logical display only; the physical
+     * size stays the RGBA buffer and DisplayManager's letterbox projection scales the content back into it. WindowManager
+     * creates its DisplayContent from the display-added event after createVirtualDisplay returns, so the override is retried
+     * until the display reports it.
+     */
+    private void applyRenderPlan(DisplayManager manager) throws Exception {
+        if (!settings.keepPhoneDpi) return;
+        int phoneDpi = phoneDensityDpi(manager);
+        DisplaySettings.RenderPlan plan = settings.renderPlan(phoneDpi);
+        if (plan == null) { log("RENDER phoneDpi=" + phoneDpi + " needs no override"); return; }
+        Object windowManager = Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null);
+        Class<?> api = Class.forName("android.view.IWindowManager");
+        Method size = api.getMethod("setForcedDisplaySize", int.class, int.class, int.class);
+        Method density = api.getMethod("setForcedDisplayDensityForUser", int.class, int.class, int.class);
+        int user = moduleUid / 100000;
+        long deadline = SystemClock.elapsedRealtime() + 3000; Point actual = new Point(); android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+        while (true) {
+            size.invoke(windowManager, displayId, plan.width(), plan.height()); density.invoke(windowManager, displayId, plan.dpi(), user);
+            Display target = display.getDisplay(); target.getRealSize(actual); target.getRealMetrics(metrics);
+            if (actual.x == plan.width() && actual.y == plan.height() && metrics.densityDpi == plan.dpi()) break;
+            if (SystemClock.elapsedRealtime() > deadline)
+                throw new IllegalStateException("系统未接受保持 DPI 的渲染尺寸：" + actual.x + "x" + actual.y + "@" + metrics.densityDpi
+                        + "，需要 " + plan.width() + "x" + plan.height() + "@" + plan.dpi());
+            Thread.sleep(100);
+        }
+        log("RENDER logical=" + plan.width() + "x" + plan.height() + " dpi=" + plan.dpi() + " buffer=" + settings.virtualWidth + "x" + settings.virtualHeight
+                + " layoutDpi=" + settings.dpi + " phoneDpi=" + phoneDpi);
+    }
+    private static int phoneDensityDpi(DisplayManager manager) {
+        Display phone = manager.getDisplay(Display.DEFAULT_DISPLAY);
+        if (phone == null) throw new IllegalStateException("读不到手机主屏密度");
+        android.util.DisplayMetrics metrics = new android.util.DisplayMetrics(); phone.getRealMetrics(metrics);
+        if (metrics.densityDpi < 100 || metrics.densityDpi > 1000) throw new IllegalStateException("手机主屏密度异常：" + metrics.densityDpi);
+        return metrics.densityDpi;
     }
     private static Context createShellContext() throws Exception {
         // A minimal ActivityThread and ConfigurationController, following scrcpy's app_process workarounds.

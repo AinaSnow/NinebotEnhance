@@ -10,7 +10,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 
-/** Observe only the verified 6.10.10 tyre parser and selected vehicle; never issue BLE/network requests. */
+/** Observe only the verified 6.10.10 / 6.10.11 tyre parser and selected vehicle; never issue BLE/network requests. */
 public final class TirePressureHooks {
     public static final String PARSER=HookCatalog.TYRE_PARSER;
     public static final String MANAGER=HookCatalog.DEVICE_MANAGER;

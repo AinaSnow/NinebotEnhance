@@ -2,6 +2,7 @@ package dev.ichinomiya.ninebotenhance.hook;
 
 import dev.ichinomiya.ninebotenhance.client.FrameClient;
 import dev.ichinomiya.ninebotenhance.ipc.Protocol;
+import dev.ichinomiya.ninebotenhance.navi.NaviApps;
 import dev.ichinomiya.ninebotenhance.platform.ModuleResources;
 import dev.ichinomiya.ninebotenhance.ui.DirectCastController;
 
@@ -27,9 +28,12 @@ import io.github.libxposed.api.XposedModule;
 public final class MirrorModule extends XposedModule {
     private final AtomicBoolean installed = new AtomicBoolean();
     private StatisticsHooks statistics;
+    private FeatureHooks feature;
     private EncodingHooks encoding;
     private TirePressureHooks tirePressure;
     private VehicleHooks vehicle;
+    private NaviSender naviSender;
+    private NaviAppHooks naviApps;
     private final Set<Class<?>> seen = ConcurrentHashMap.newKeySet();
     private final Set<Executable> hooked = ConcurrentHashMap.newKeySet();
     private final Set<Executable> called = ConcurrentHashMap.newKeySet();
@@ -53,12 +57,14 @@ public final class MirrorModule extends XposedModule {
         "cn.ninebot.capture.encoder.FFmpegBitmapEncoder", "cn.ninebot.capture.encoder.FFmpegViewEncoder",
         "cn.ninebot.capture.encoder.FFmpegImageReaderEncoder", "cn.ninebot.capture.encoder.ImageReaderEncoder",
         "cn.ninebot.capture.mjpeg.MJpegEncoder", "cn.ninebot.capture.mjpeg.MJpegViewEncoder",
-        "cn.ninebot.capture.mpeg2.Mpeg2Encoder", "cn.ninebot.capture.mpeg2.ViewToMpeg2Encoder",
+        "cn.ninebot.capture.mpeg2.Mpeg2Encoder", "cn.ninebot.capture.mpeg2.ViewToMpeg2Encoder", "cn.ninebot.capture.mpeg2.NbFFmpegFrameRecorder",
         "cn.ninebot.capture.AbstractCaptureController$drawViewRunnable$1",
         "cn.ninebot.capture.encoder.ViewEncoder$1$getBitmap$2$1",
         "cn.ninebot.capture.ViewToBitmapConvert$convert$1",
         "cn.ninebot.mapcapture.DeviceScreenCastManager", "cn.ninebot.mapcapture.DeviceScreenCastRequest",
         "cn.ninebot.mapcapture.NBBluetoothRtpSender", "cn.ninebot.library.screencast.BluetoothRtpSender",
+        StatisticsHooks.WIFI_SENDER, StatisticsHooks.FRAME_SENDER, StatisticsHooks.SEND_QUEUE, StatisticsHooks.UDP_SESSION, StatisticsHooks.BLE_WRITER,
+        StatisticsHooks.ENCODE_SINKS[0], StatisticsHooks.ENCODE_SINKS[1], StatisticsHooks.ENCODE_SINKS[2], FeatureHooks.VIEW_HOLDER, FeatureHooks.VIEW_MODELS, FeatureHooks.VISIBILITY_STORE, FeatureHooks.NAVIGATION_CARD,
         "cn.ninebot.device.motor.navi.DashNaviDataMessenger",
         "cn.ninebot.device.motor.navi.DashNaviDataMessenger$Companion",
         "cn.ninebot.device.motor.navi.CruiseModeActivity",
@@ -72,23 +78,35 @@ public final class MirrorModule extends XposedModule {
     }
     @Override public void onPackageLoaded(PackageLoadedParam param) {
         if (Protocol.TARGET.equals(param.getPackageName())) install(param.getDefaultClassLoader());
+        else if (NaviApps.supported(param.getPackageName())) naviApps(param.getPackageName()).install(param.getDefaultClassLoader());
     }
     @Override public void onPackageReady(PackageReadyParam param) {
+        if (NaviApps.supported(param.getPackageName())) { naviApps(param.getPackageName()).ready(param.getClassLoader()); return; }
         if (!Protocol.TARGET.equals(param.getPackageName())) return;
         install(param.getClassLoader()); loaders.add(param.getClassLoader());
+    }
+    /** Navigation apps get their own observe-only probe; the Ninebot hooks are never installed there. */
+    private synchronized NaviAppHooks naviApps(String pkg) {
+        if (naviApps == null) naviApps = new NaviAppHooks(this, pkg, process);
+        return naviApps;
     }
     private void install(ClassLoader loader) {
         loaders.add(loader);
         if (!installed.compareAndSet(false, true)) return;
         frames = new FrameClient(process == null ? Protocol.TARGET : process);
         statistics = new StatisticsHooks(this, frames);
+        feature = new FeatureHooks(this, frames);
         encoding = new EncodingHooks(this, frames);
         tirePressure = new TirePressureHooks(this, frames, () -> compatibleVersion, this::updateSummary);
         vehicle = new VehicleHooks(this, frames, () -> compatibleVersion, this::updateSummary);
         frames.setVehicleReader(vehicle::pulse, vehicle::stop, vehicle::summary);
+        naviSender = new NaviSender(frames, vehicle::deviceClass, () -> compatibleVersion);
+        frames.setNaviTest(naviSender::pulse, naviSender::stop);
+        frames.setNaviLive(naviSender::pulseLive);
+        frames.setThemeSender(naviSender::pulseTheme);
         encoding.install();
         direct = new DirectCastController(frames, () -> compatibleVersion);
-        frames.report("MODULE " + Protocol.VERSION + " loaded API=" + getApiVersion() + "; target=6.10.10; direct cruise entry");
+        frames.report("MODULE " + Protocol.VERSION + " loaded API=" + getApiVersion() + "; target=" + HookCatalog.versions() + "; direct cruise entry");
         try {
             Method attach = Application.class.getDeclaredMethod("attach", Context.class);
             hook(attach).intercept(chain -> {
@@ -98,7 +116,7 @@ public final class MirrorModule extends XposedModule {
                     if (Protocol.TARGET.equals(context.getPackageName())) {
                         frames.attach(context);
                         android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(Protocol.TARGET, 0);
-                        compatibleVersion = "6.10.10".equals(info.versionName) && info.getLongVersionCode() == 610104038L;
+                        compatibleVersion = HookCatalog.compatible(info.versionName, info.getLongVersionCode());
                         if (chain.getThisObject() instanceof Application) direct.attach((Application)chain.getThisObject());
                         frames.report("TARGET " + info.versionName + "/" + info.getLongVersionCode() + " compatible=" + compatibleVersion);
                         loaders.add(context.getClassLoader());
@@ -178,6 +196,8 @@ public final class MirrorModule extends XposedModule {
         if (!HookPolicy.interestingClass(type.getName()) || seen.size() >= 220 || !seen.add(type)) return;
         if (TirePressureHooks.interesting(type.getName())) { tirePressure.inspect(type); updateSummary(); return; }
         if (VehicleHooks.interesting(type.getName())) { vehicle.inspect(type); updateSummary(); return; }
+        if (FeatureHooks.interesting(type.getName())) { feature.inspect(type); updateSummary(); return; }
+        if (type.getName().equals(FeatureHooks.NAVI_MESSENGER_COMPANION)) feature.installTheme(type);
         statistics.inspect(type);
         encoding.inspect(type);
         boolean capture = HookPolicy.captureClass(type.getName());
@@ -207,7 +227,7 @@ public final class MirrorModule extends XposedModule {
     private void updateSummary() {
         String compatibility = frames.compatibility();
         frames.summary((compatibleVersion ? "" : "版本未确认或不匹配，替换已禁用\n") + (compatibility.isEmpty() || compatibility.contains("缺失") ? compatibility + (compatibility.isEmpty() ? "" : "\n") : "")
-                + "发现 " + seen.size() + " 类 / 安装 " + (hooked.size()+tirePressure.hookCount()+vehicle.hookCount()) + " Hook / 命中 " + (called.size()+tirePressure.hitCount()+vehicle.hitCount()));
+                + "发现 " + seen.size() + " 类 / 安装 " + (hooked.size()+tirePressure.hookCount()+vehicle.hookCount()+feature.hookCount()) + " Hook / 命中 " + (called.size()+tirePressure.hitCount()+vehicle.hitCount()));
     }
     private void installPowerObserver(Method method) {
         Class<?>[] params = method.getParameterTypes();

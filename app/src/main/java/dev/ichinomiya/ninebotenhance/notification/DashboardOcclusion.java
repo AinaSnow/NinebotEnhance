@@ -16,12 +16,24 @@ public final class DashboardOcclusion {
     /** Same fit as the HUD: the 848 x 480 reference frame scaled into the given size, anchored bottom right. */
     public static void draw(Canvas canvas,int width,int height){draw(canvas,width,height,false);}
     /** With hillHold the dashboard's own "拧动油门解除坡道驻车" toast is mocked at the lower right as well. */
-    public static synchronized void draw(Canvas canvas,int width,int height,boolean hillHold){
+    public static void draw(Canvas canvas,int width,int height,boolean hillHold){draw(canvas,width,height,hillHold,dev.ichinomiya.ninebotenhance.core.SidebarLayout.DEFAULT_OCCLUSIONS);}
+    /** Every dashboard occlusion (reference frame) is mocked as a card; the first one carries the instrument mock-up. */
+    public static synchronized void draw(Canvas canvas,int width,int height,boolean hillHold,java.util.List<dev.ichinomiya.ninebotenhance.core.SidebarLayout.Box> occlusions){
         if(width<=0||height<=0)return;int save=canvas.save();
         try{
             canvas.clipRect(0,0,width,height);float scale=Math.min(width/848f,height/480f);canvas.translate(width-848*scale,height-480*scale);canvas.scale(scale,scale);
-            instrument(canvas);if(hillHold)hillHoldToast(canvas);
+            boolean first=true;
+            for(dev.ichinomiya.ninebotenhance.core.SidebarLayout.Box b:occlusions==null?dev.ichinomiya.ninebotenhance.core.SidebarLayout.DEFAULT_OCCLUSIONS:occlusions){
+                RectF r=new RectF(b.left(),b.top(),b.right(),b.bottom());
+                if(first&&r.width()>=150&&r.height()>=200)instrument(canvas,r);else card(canvas,r);
+                first=false;
+            }
+            if(hillHold)hillHoldToast(canvas);
         }finally{canvas.restoreToCount(save);}
+    }
+    private static void card(Canvas c,RectF r){
+        paint.setStyle(Paint.Style.FILL);paint.setColor(0xf01d2124);c.drawRoundRect(r,16,16,paint);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(0x55ffffff);c.drawRoundRect(r,16,16,paint);paint.setStyle(Paint.Style.FILL);
     }
     private static void hillHoldToast(Canvas c){
         dev.ichinomiya.ninebotenhance.core.SidebarLayout.Box b=dev.ichinomiya.ninebotenhance.core.SidebarLayout.HILL_HOLD_TOAST;
@@ -30,8 +42,7 @@ public final class DashboardOcclusion {
         font(26,true);centered(c,"H",b.left()+39,b.top()+55,0xfff2f4f5);
         font(17,false);left(c,"拧动油门解除坡道驻车",b.left()+70,b.top()+52,0xfff2f4f5);
     }
-    private static void instrument(Canvas c){
-        RectF r=INSTRUMENT;
+    private static void instrument(Canvas c,RectF r){
         paint.setStyle(Paint.Style.FILL);paint.setColor(0xf01d2124);c.drawRoundRect(r,16,16,paint);
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(0x55ffffff);c.drawRoundRect(r,16,16,paint);paint.setStyle(Paint.Style.FILL);
         font(86,true);centered(c,"P",r.centerX(),r.top+82,0xfff2f4f5);

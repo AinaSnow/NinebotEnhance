@@ -214,6 +214,7 @@ public final class LampController {
             int delta=current.stepUnits(live.lowLimit(),live.highLimit());boolean deviceUp=up^current.reversed();
             int lo=Math.max(TxLampProtocol.MIN_POSITION,live.lowLimit()),hi=live.highLimit();
             if(lo>hi){lo=TxLampProtocol.MIN_POSITION;hi=TxLampProtocol.MAX_POSITION;}
+            hi=LampSettings.topLimit(lo,hi);
             desired=Math.max(lo,Math.min(hi,from+(deviceUp?delta:-delta)));
             desiredAt=at;
             long wait=Math.max(0,STEP_INTERVAL_MS-(at-lastWriteAt));

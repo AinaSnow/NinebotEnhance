@@ -14,10 +14,12 @@ import java.util.*;
  */
 public record DashboardLayout(int frameWidth,int frameHeight,List<Box> boundRects,List<Box> phoneDrawn,String style) {
     public static final int REFERENCE_WIDTH=848,REFERENCE_HEIGHT=480;
+    /** Codec sizes the boards are known to report range from 240 x 320 (portrait half-screen dashboards) to 848 x 480. */
+    public static final int MIN_SIDE=160,MAX_SIDE=1920;
     /** Calibrated fallback used when no configuration has been read: the instrument card measured from a dashboard photo. */
     public static final DashboardLayout DEFAULT=new DashboardLayout(REFERENCE_WIDTH,REFERENCE_HEIGHT,List.of(SidebarLayout.INSTRUMENT),List.of(),"");
     public DashboardLayout {
-        if(frameWidth<320||frameHeight<320||frameWidth>1920||frameHeight>1920)throw new IllegalArgumentException("frame "+frameWidth+"x"+frameHeight);
+        if(frameWidth<MIN_SIDE||frameHeight<MIN_SIDE||frameWidth>MAX_SIDE||frameHeight>MAX_SIDE)throw new IllegalArgumentException("frame "+frameWidth+"x"+frameHeight);
         boundRects=List.copyOf(boundRects);phoneDrawn=List.copyOf(phoneDrawn);style=style==null?"":style;
     }
     public static DashboardLayout parse(String json) {

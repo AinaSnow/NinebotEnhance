@@ -144,17 +144,17 @@ public final class FrameClient {
                 savedApp = p.getString(AppCatalog.SELECTED, "");
                 savedPrivilege = PrivilegeMode.parse(p.getString("privilege_mode", "AUTO"));
             } catch (RuntimeException e) { report("SETTINGS cache " + Ipc.error(e)); }
-            try {
-                SharedPreferences debug = debugPreferences();
-                debugMode.restore(debug.getBoolean("unlocked", false), debug.getBoolean("enabled", false));
-            } catch (RuntimeException e) { report("DEBUG settings " + Ipc.error(e)); }
+            // Developer options live for one run of the host: the version taps, calibration, register probe and navigation test
+            // all start hidden and off, whatever an earlier run left behind.
+            debugMode.restore(false, false);
             try {
                 SharedPreferences saved=context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE);
                 widgets=WidgetSettings.migrate(saved.getInt("version",1),saved.getInt("mask",WidgetSettings.ALL),saved.getInt("tyre_interval",WidgetSettings.DEFAULT_TYRE_SECONDS),saved.getInt("voltage_interval_ms",saved.getInt("voltage_interval",1)*1000),saved.getInt("music_hide",WidgetSettings.DEFAULT_MUSIC_HIDE_SECONDS),saved.getInt("chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),saved.getInt("hold_power",WidgetSettings.DEFAULT_HOLD_POWER),saved.getInt("hold_speed",WidgetSettings.DEFAULT_HOLD_SPEED),saved.getInt("speed_interval_ms",saved.getInt("speed_interval",1)*1000),saved.getInt("power_interval_ms",saved.getInt("power_interval",1)*1000),saved.getInt("hold_power_max",WidgetSettings.DEFAULT_HOLD_POWER_MAX),saved.getInt("hold_seconds",WidgetSettings.DEFAULT_HOLD_SECONDS),saved.getInt("speed_chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),saved.getInt("power_chart_seconds",WidgetSettings.DEFAULT_CHART_SECONDS),WidgetSettings.parseOrder(saved.getString("widget_order","")),loadConditions(saved));
+                widgets=widgets.with(WidgetSettings.REGISTER_PROBE,false);
                 hud.setWidgets(widgets);
-                encoderOverride=new EncoderOverride(saved.getInt("encoder_bitrate_kbps",0),saved.getInt("encoder_fps",0),saved.getBoolean("preview_stats",false));
+                encoderOverride=new EncoderOverride(saved.getInt("encoder_bitrate_kbps",0),saved.getInt("encoder_fps",0),saved.getBoolean("preview_stats",false),saved.getInt("encoder_frame_width",0),saved.getInt("encoder_frame_height",0));
                 hiddenFeatures=new HiddenFeatures(saved.getBoolean("unhide_throttle",false),saved.getBoolean("unhide_hardkey",false),saved.getBoolean("unhide_cruise",false));
-                naviTest=saved.getBoolean("navi_test",false);
+                naviTest=false;
                 naviLive=saved.getBoolean("navi_live",true);
                 dashboardDark=saved.getBoolean("dashboard_dark",true);hud.setDark(dashboardDark);
                 java.util.Set<String> chosen=saved.getStringSet("probe_registers",null); if(chosen!=null) probeSelection=new java.util.LinkedHashSet<>(chosen);
@@ -171,8 +171,11 @@ public final class FrameClient {
     public void selectVehicle(String key) { tires.select(key); battery.select(key); metadataWorker.post(() -> loadDashboardLayout(key)); }
     /** Frame size and dashboard occlusions from the selected vehicle's cached cast configuration; the calibrated default until one is read. */
     public DashboardLayout dashboardLayout() { return dashboardLayout; }
-    public int frameWidth() { return dashboardLayout.frameWidth(); }
-    public int frameHeight() { return dashboardLayout.frameHeight(); }
+    /** The composed frame: the user override when set, otherwise the size read from the cast configuration. */
+    public int frameWidth() { EncoderOverride o = encoderOverride; return o.overridesFrame() ? o.frameWidth() : dashboardLayout.frameWidth(); }
+    public int frameHeight() { EncoderOverride o = encoderOverride; return o.overridesFrame() ? o.frameHeight() : dashboardLayout.frameHeight(); }
+    /** Portrait frames (half-screen dashboards) take the single-column HUD layout without dodge or dashboard occlusions. */
+    public boolean halfScreen() { return dev.ichinomiya.ninebotenhance.core.SidebarLayout.halfScreen(frameWidth(), frameHeight()); }
     /** Ninebot caches the TFT board's configuration as {@code <SN>_screen_cast_config.nb} in its external files directory; read-only here. */
     private void loadDashboardLayout(String vehicle) {
         if (context == null || vehicle == null || vehicle.isEmpty()) return;
@@ -183,7 +186,11 @@ public final class FrameClient {
             DashboardLayout parsed = DashboardLayout.parse(text);
             boolean changed = !parsed.equals(dashboardLayout) || !vehicle.equals(layoutVehicle);
             dashboardLayout = parsed; layoutVehicle = vehicle; hud.setOcclusions(parsed.referenceOcclusions());
-            if (changed) { report("LAYOUT " + parsed.describe()); View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation(); }
+            if (changed) {
+                report("LAYOUT " + parsed.describe() + (dev.ichinomiya.ninebotenhance.core.SidebarLayout.halfScreen(parsed.frameWidth(), parsed.frameHeight()) ? " layout=half-screen" : "")
+                        + (dev.ichinomiya.ninebotenhance.core.SidebarLayout.fits(parsed.frameWidth(), parsed.frameHeight()) ? "" : " cards=hidden (frame below " + Math.round(dev.ichinomiya.ninebotenhance.core.SidebarLayout.MIN_FIT * 100) + "% of the reference)"));
+                View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation();
+            }
         } catch (RuntimeException | java.io.IOException e) { report("LAYOUT unusable cast configuration " + Ipc.error(e instanceof RuntimeException ? (RuntimeException) e : new IllegalStateException(e))); }
     }
     /** Installed by the hook layer: pulse while a vehicle session may read, stop resets the read schedule. */
@@ -202,7 +209,6 @@ public final class FrameClient {
     }
     public void saveNaviTest(boolean value){
         naviTest=value;
-        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean("navi_test",value).apply();
         report("NAVITEST switch "+(value?"on":"off"));
     }
     /** The one-time open-source sentence lives with the other host-side settings, so it is asked once per Ninebot install. */
@@ -249,7 +255,7 @@ public final class FrameClient {
     public void setEncoderOverrideApplier(java.util.function.Consumer<EncoderOverride> applier){overrideApplier=applier;}
     public void saveEncoderOverride(EncoderOverride value){
         encoderOverride=value;
-        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putInt("encoder_bitrate_kbps",value.bitrateKbps()).putInt("encoder_fps",value.fps()).putBoolean("preview_stats",value.previewStats()).apply();
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putInt("encoder_bitrate_kbps",value.bitrateKbps()).putInt("encoder_fps",value.fps()).putBoolean("preview_stats",value.previewStats()).putInt("encoder_frame_width",value.frameWidth()).putInt("encoder_frame_height",value.frameHeight()).apply();
         report("OVERRIDE saved "+value.describe());
         try{overrideApplier.accept(value);}catch(RuntimeException e){report("OVERRIDE apply "+Ipc.error(e));}
         View preview=inlinePreview.get();if(preview!=null)preview.postInvalidateOnAnimation();
@@ -425,7 +431,7 @@ public final class FrameClient {
             hud.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), SystemClock.elapsedRealtime());
             // The local simulation shows, on top of everything, what the vehicle dashboard itself paints over the frame.
             DirectSession.Mode current = mode;
-            if (current != null && current != DirectSession.Mode.VEHICLE) dev.ichinomiya.ninebotenhance.notification.DashboardOcclusion.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), hud.hillHold(SystemClock.elapsedRealtime()), hud.occlusions());
+            if (current != null && current != DirectSession.Mode.VEHICLE && !dev.ichinomiya.ninebotenhance.core.SidebarLayout.halfScreen(Math.round(r[2]-r[0]), Math.round(r[3]-r[1]))) dev.ichinomiya.ninebotenhance.notification.DashboardOcclusion.draw(canvas, Math.round(r[2]-r[0]), Math.round(r[3]-r[1]), hud.hillHold(SystemClock.elapsedRealtime()), hud.occlusions());
             canvas.restoreToCount(overlaySave);
             if (encoderOverride.previewStats()) drawStatistics(canvas, r[0], r[1]);
         }
@@ -741,27 +747,15 @@ public final class FrameClient {
     }
     public boolean debugModeUnlocked() { return debugMode.unlocked(); }
     public boolean debugModeEnabled() { return debugMode.enabled(); }
-    public boolean debugVersionTap() {
-        boolean wasUnlocked = debugMode.unlocked();
-        boolean unlocked = debugMode.tapVersion();
-        if (unlocked && !wasUnlocked) persistDebug();
-        return unlocked;
-    }
+    public boolean debugVersionTap() { return debugMode.tapVersion(); }
     public void setDebugMode(boolean enabled) {
         synchronized (frameLock) {
             if (!debugMode.setEnabled(enabled)) return;
             pictureRevision++; calibration = null;
         }
-        persistDebug(); report("DEBUG calibration enabled=" + debugMode.enabled());
+        report("DEBUG calibration enabled=" + debugMode.enabled());
         worker.post(this::refreshCalibration);
         View preview = inlinePreview.get(); if (preview != null) preview.postInvalidateOnAnimation();
-    }
-    private SharedPreferences debugPreferences() {
-        return context.getSharedPreferences(Protocol.MODULE + ".debug", Context.MODE_PRIVATE);
-    }
-    private void persistDebug() {
-        try { if (context != null) debugPreferences().edit().putBoolean("unlocked", debugMode.unlocked()).putBoolean("enabled", debugMode.enabled()).apply(); }
-        catch (RuntimeException e) { report("DEBUG settings write " + Ipc.error(e)); }
     }
     private void refreshCalibration() {
         Bitmap previous = calibration;

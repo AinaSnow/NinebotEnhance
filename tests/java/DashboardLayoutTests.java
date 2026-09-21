@@ -61,5 +61,25 @@ final class DashboardLayoutTests {
         DisplaySettings same=DisplaySettings.defaults().withFrame(848,480);
         check(same.width==848&&same.virtualWidth==640&&same.virtualHeight==440,"an unchanged frame keeps the virtual display");
         check(DisplaySettings.defaults().withFrame(100,100).width==848,"an unusable frame is ignored");
+        DashboardLayout portrait=DashboardLayout.parse(M5P.replace("\"dimensionWidth\": 848.0","\"dimensionWidth\": 240.0").replace("\"dimensionHeight\": 480.0","\"dimensionHeight\": 320.0")
+                .replace("\"codecWidth\": 848.0","\"codecWidth\": 240.0").replace("\"codecHeight\": 480.0","\"codecHeight\": 320.0"));
+        check(portrait.frameWidth()==240&&portrait.frameHeight()==320,"a 240 x 320 half-screen configuration is read instead of rejected");
+        DisplaySettings small=new DisplaySettings(848,480,600,480,180,0xff242424,true).withFrame(240,320);
+        check(small.width==240&&small.height==320&&small.virtualWidth==240&&small.virtualHeight==300&&small.dpi==180,"the virtual display shrinks into a portrait frame keeping the density and the top strip");
+        check(SidebarLayout.fits(848,480)&&SidebarLayout.fits(636,360)&&SidebarLayout.fits(340,192)&&!SidebarLayout.fits(200,100)&&!SidebarLayout.fits(0,320),"landscape cards are drawn down to 40% of the reference fit and hidden below");
+        SidebarLayout.Fit portraitFit=SidebarLayout.fit(240,320),wide=SidebarLayout.fit(848,480);
+        check(portraitFit.halfScreen()&&!wide.halfScreen()&&Math.abs(portraitFit.scale()-240/210f)<1e-4&&Math.abs(portraitFit.dx()-(240-848*portraitFit.scale()))<.01&&Math.abs(portraitFit.dy()-(320-480*portraitFit.scale()))<.01&&SidebarLayout.fits(240,320),"a portrait frame maps the card column onto the full frame width");
+        check(wide.scale()==1&&wide.dx()==0&&wide.dy()==0,"the reference frame maps onto itself");
+        check(SidebarLayout.notificationWidth(312,true)==190&&SidebarLayout.notificationWidth(312,false)==312&&SidebarLayout.notificationWidth(180,true)==180,"half-screen notifications are capped at the column width");
+        check(small.virtualHeight==300&&DisplaySettings.defaults().withFrame(636,360).virtualHeight==360,"a portrait frame keeps a 20 px strip above the app");
+        int stackMask=WidgetSettings.PHONE|WidgetSettings.MUSIC|WidgetSettings.TYRES|WidgetSettings.VOLTAGE|WidgetSettings.SPEED|WidgetSettings.POWER|WidgetSettings.LAMP;
+        SidebarLayout.Stack single=SidebarLayout.arrange(WidgetSettings.DEFAULT,stackMask,0,SidebarLayout.fullWidth(),true,List.of(SidebarLayout.INSTRUMENT),true);
+        SidebarLayout.Stack twoColumn=SidebarLayout.arrange(WidgetSettings.DEFAULT,stackMask,0,SidebarLayout.fullWidth(),false,List.of(SidebarLayout.INSTRUMENT),false);
+        boolean allRight=true,anyLeft=false;
+        for(int w:new int[]{WidgetSettings.PHONE,WidgetSettings.MUSIC,WidgetSettings.TYRES,WidgetSettings.VOLTAGE,WidgetSettings.SPEED,WidgetSettings.POWER,WidgetSettings.LAMP}){
+            SidebarLayout.Box one=single.of(w),two=twoColumn.of(w);
+            allRight&=one!=null&&one.right()==SidebarLayout.RIGHT&&one.width()==SidebarLayout.WIDTH;anyLeft|=two!=null&&two.right()!=SidebarLayout.RIGHT;
+        }
+        check(allRight&&anyLeft&&!single.notificationDodged(),"the half-screen column keeps every full-width card on the right where the two-column layout would overflow to the left");
     }
 }

@@ -7,7 +7,7 @@ Ninebot Enhance 的首个发布版本为 **1.0.0**，Git 发布标签为 `v1.0.0
 - 项目名：`Ninebot Enhance`。
 - 包名：`dev.ichinomiya.ninebotenhance`。
 - `version.properties` 与 `ipc/Protocol.java` 中的版本名称、版本代码必须一致，构建脚本会自动核对。
-- 当前发布版本为 `1.1.0`，Android `versionCode=38`，使用原签名覆盖安装；它在 1.0.2 之上加入首次打开设置的开源确认，关于页写入项目地址与作者。版本代码是单调递增的安装标识，不是发布次数。
+- 当前发布版本为 `1.1.1`，Android `versionCode=39`，使用原签名覆盖安装；它修复 Android 17 上守护进程的 ApplicationSharedMemory 初始化、接受 240×320 半屏仪表配置并加入半屏布局、编码覆盖新增分辨率覆盖、大灯档位改为 5–15 且上限减 1、关于页三个调试项每次运行重置。
 - 发布使用固定签名，公开 SHA-256 指纹保存在 `release-signing-certificate.txt`。
 - 私钥与密码保存在 Git 忽略的 `signing/`，后续更新继续使用同一密钥。
 

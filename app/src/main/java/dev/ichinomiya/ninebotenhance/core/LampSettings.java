@@ -13,7 +13,10 @@ import java.util.Locale;
  */
 public record LampSettings(String mac,String password,int speed,int steps,boolean reversed,boolean volumeControl){
     public static final int MIN_SPEED=1,MAX_SPEED=20,DEFAULT_SPEED=10;
-    public static final int MIN_STEPS=2,MAX_STEPS=20,DEFAULT_STEPS=5;
+    public static final int MIN_STEPS=5,MAX_STEPS=15,DEFAULT_STEPS=8;
+    /** The hoist never targets the reported upper limit itself: one raw unit below it is the usable top (0–73 reaches 72). */
+    public static final int TOP_MARGIN=1;
+    public static int topLimit(int low,int high){int lo=Math.min(low,high),hi=Math.max(low,high);return hi-lo>=2?hi-TOP_MARGIN:hi;}
     public static final LampSettings NONE=new LampSettings("","",DEFAULT_SPEED,DEFAULT_STEPS,false,true);
     public LampSettings{
         mac=normalizeMac(mac);
@@ -26,11 +29,11 @@ public record LampSettings(String mac,String password,int speed,int steps,boolea
     /** Protocol speed 0–100 from the 1–20 step scale, like the vendor application's slider. */
     public int protocolSpeed(){return Math.max(TxLampProtocol.MIN_SPEED,Math.min(TxLampProtocol.MAX_SPEED,speed*5));}
     /** Raw device units moved by one volume press: the reported travel range split into the step count, at least one unit. */
-    public int stepUnits(int low,int high){return Math.max(1,Math.round(Math.max(0,high-low)/(float)steps));}
+    public int stepUnits(int low,int high){return Math.max(1,Math.round(Math.max(0,topLimit(low,high)-Math.min(low,high))/(float)steps));}
     /** Displayed brightness 0–100 for a raw position between the reported travel limits, flipped when reversed; -1 when unknown. */
     public int displayPercent(int position,int low,int high){
         if(position<0)return -1;
-        int lo=Math.min(low,high),hi=Math.max(low,high);
+        int lo=Math.min(low,high),hi=topLimit(low,high);
         if(hi<=lo)return reversed?100:0;
         int normal=Math.max(0,Math.min(100,Math.round((Math.max(lo,Math.min(hi,position))-lo)*100f/(hi-lo))));
         return reversed?100-normal:normal;

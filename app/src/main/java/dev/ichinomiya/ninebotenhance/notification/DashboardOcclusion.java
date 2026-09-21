@@ -21,7 +21,7 @@ public final class DashboardOcclusion {
     public static synchronized void draw(Canvas canvas,int width,int height,boolean hillHold,java.util.List<dev.ichinomiya.ninebotenhance.core.SidebarLayout.Box> occlusions){
         if(width<=0||height<=0)return;int save=canvas.save();
         try{
-            canvas.clipRect(0,0,width,height);float scale=Math.min(width/848f,height/480f);canvas.translate(width-848*scale,height-480*scale);canvas.scale(scale,scale);
+            canvas.clipRect(0,0,width,height);dev.ichinomiya.ninebotenhance.core.SidebarLayout.Fit fit=dev.ichinomiya.ninebotenhance.core.SidebarLayout.fit(width,height);canvas.translate(fit.dx(),fit.dy());canvas.scale(fit.scale(),fit.scale());
             boolean first=true;
             for(dev.ichinomiya.ninebotenhance.core.SidebarLayout.Box b:occlusions==null?dev.ichinomiya.ninebotenhance.core.SidebarLayout.DEFAULT_OCCLUSIONS:occlusions){
                 RectF r=new RectF(b.left(),b.top(),b.right(),b.bottom());

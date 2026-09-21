@@ -5,6 +5,23 @@ import java.util.*;
 /** One geometry definition shared by drawing and hit testing, in the 848 x 480 reference frame. */
 public final class SidebarLayout {
     public static final float LEFT=648,RIGHT=838,BOTTOM=468,GAP=6,WIDTH=RIGHT-LEFT,MIN_WIDTH=24;
+    /** The reference frame is fitted into the encoder frame anchored bottom right; below this scale the cards are unreadable and are not drawn. */
+    public static final float MIN_FIT=0.4f;
+    /** Half-screen (portrait) frames show the card column and its margins across the whole frame width; the app keeps a strip above. */
+    public static final float HALF_SCREEN_SPAN=848-(LEFT-10);
+    public static final int HALF_SCREEN_TOP_INSET=20;
+    public record Fit(float scale,float dx,float dy,boolean halfScreen){}
+    public static boolean halfScreen(int width,int height){return width>0&&height>width;}
+    public static Fit fit(int width,int height){
+        if(width<=0||height<=0)return new Fit(0,0,0,false);
+        boolean half=halfScreen(width,height);
+        float scale=half?width/HALF_SCREEN_SPAN:Math.min(width/848f,height/480f);
+        return new Fit(scale,width-848*scale,height-480*scale,half);
+    }
+    public static boolean fits(int width,int height){return fit(width,height).scale()>=MIN_FIT;}
+    /** Half-screen notifications cannot be wider than the column they share with the cards. */
+    public static int notificationWidth(int width,boolean halfScreen){return halfScreen?Math.min(width,(int)WIDTH):width;}
+    public static Sizes fullWidth(){return new Sizes(WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH);}
     /** Second column just left of the first, for cards the dashboard's top-right instrument would otherwise hide. */
     public static final float LEFT_COLUMN_RIGHT=LEFT-2.5f*GAP,LEFT_COLUMN_LEFT=LEFT_COLUMN_RIGHT-WIDTH;
     /** The music card matches the chart cards in height. */
@@ -72,10 +89,13 @@ public final class SidebarLayout {
      * reach into a dashboard occlusion (the instrument card by default, the configuration's bound rectangles when read) join the
      * left column, each slotted among its cards by height, until the column is short enough again.
      */
-    public static Stack arrange(WidgetSettings settings,int visible,float notificationHeight,Sizes sizes,boolean dodge,List<Box> occlusions){
+    public static Stack arrange(WidgetSettings settings,int visible,float notificationHeight,Sizes sizes,boolean dodge,List<Box> occlusions){return arrange(settings,visible,notificationHeight,sizes,dodge,occlusions,false);}
+    /** A single column (half-screen frames) stacks every card in the saved order on the right, with no dodge and no occlusion overflow. */
+    public static Stack arrange(WidgetSettings settings,int visible,float notificationHeight,Sizes sizes,boolean dodge,List<Box> occlusions,boolean singleColumn){
         float lift=Math.max(0,notificationHeight),bottom=BOTTOM,notificationBottom=BOTTOM,leftBottom=BOTTOM;
         LinkedHashMap<Integer,Box> placed=new LinkedHashMap<>();
         List<Integer> right=settings.rightOrder(),left=settings.leftOrder();
+        if(singleColumn){ArrayList<Integer> all=new ArrayList<>(right);all.addAll(left);right=all;left=List.of();dodge=false;occlusions=List.of();}
         for(int w:right){
             if(w==WidgetSettings.NOTIFICATIONS){notificationBottom=bottom;bottom-=lift;continue;}
             if((visible&w)==0)continue;

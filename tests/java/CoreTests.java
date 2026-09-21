@@ -59,7 +59,8 @@ public final class CoreTests {
         rejects(()->new DisplaySettings(848,480,850,440,160,0xff242424),"oversize app width cannot be cropped");
         rejects(()->new DisplaySettings(848,480,640,482,160,0xff242424),"oversize app height cannot be cropped");
         rejects(()->new DisplaySettings(848,480,641,440,160,0xff242424),"odd virtual width rejected");
-        rejects(()->new DisplaySettings(848,480,640,200,160,0xff242424),"tiny virtual height rejected");
+        rejects(()->new DisplaySettings(848,480,640,150,160,0xff242424),"tiny virtual height rejected");
+        check(new DisplaySettings(240,320,240,320,160,0xff242424).virtualHeight==320,"a 240 x 320 half-screen frame is accepted");
         DisplaySettings keep=new DisplaySettings(848,480,640,440,160,0xff242424,true),off=new DisplaySettings(848,480,640,440,160,0xff242424,false);
         check(d.keepPhoneDpi&&DisplaySettings.DEFAULT_KEEP_PHONE_DPI,"keep-phone-DPI is on by default");
         DisplaySettings.RenderPlan plan=keep.renderPlan(520);

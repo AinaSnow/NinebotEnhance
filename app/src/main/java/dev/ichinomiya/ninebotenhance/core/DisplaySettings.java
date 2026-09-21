@@ -21,10 +21,10 @@ public final class DisplaySettings {
     public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor,boolean keepPhoneDpi){this(width,height,virtualWidth,virtualHeight,dpi,backgroundColor,keepPhoneDpi,DEFAULT_LIGHT_BACKGROUND_COLOR);}
     /** {@code backgroundColor} fills the frame around the app in the dark dashboard theme, {@code lightBackgroundColor} in the light one. */
     public DisplaySettings(int width,int height,int virtualWidth,int virtualHeight,int dpi,int backgroundColor,boolean keepPhoneDpi,int lightBackgroundColor){
-        if(width<320||height<320||width>1920||height>1920||(width&1)!=0||(height&1)!=0||(long)width*height>2073600)
-            throw new IllegalArgumentException("整帧宽高需为 320–1920 的偶数，总像素不超过 1920×1080。");
-        if(virtualWidth<240||virtualHeight<240||virtualWidth>width||virtualHeight>height||(virtualWidth&1)!=0||(virtualHeight&1)!=0)
-            throw new IllegalArgumentException("虚拟屏宽高需为不小于 240 的偶数，且不能超过整帧宽高。");
+        if(width<DashboardLayout.MIN_SIDE||height<DashboardLayout.MIN_SIDE||width>DashboardLayout.MAX_SIDE||height>DashboardLayout.MAX_SIDE||(width&1)!=0||(height&1)!=0||(long)width*height>2073600)
+            throw new IllegalArgumentException("整帧宽高需为 160–1920 的偶数，总像素不超过 1920×1080。");
+        if(virtualWidth<DashboardLayout.MIN_SIDE||virtualHeight<DashboardLayout.MIN_SIDE||virtualWidth>width||virtualHeight>height||(virtualWidth&1)!=0||(virtualHeight&1)!=0)
+            throw new IllegalArgumentException("虚拟屏宽高需为不小于 160 的偶数，且不能超过整帧宽高。");
         if(dpi<100||dpi>480||Math.min(virtualWidth,virtualHeight)*160L/dpi<160)
             throw new IllegalArgumentException("DPI 为 100–480，虚拟屏最短边至少 160 dp。");
         BandColor.requireOpaque(backgroundColor);BandColor.requireOpaque(lightBackgroundColor);
@@ -58,7 +58,8 @@ public final class DisplaySettings {
     public DisplaySettings withFrame(int frameWidth,int frameHeight){
         int w=frameWidth&~1,h=frameHeight&~1;
         if(w==width&&h==height)return this;
-        try { return new DisplaySettings(w,h,Math.min(virtualWidth,w)&~1,Math.min(virtualHeight,h)&~1,dpi,backgroundColor,keepPhoneDpi,lightBackgroundColor); }
+        int maxHeight=SidebarLayout.halfScreen(w,h)?h-SidebarLayout.HALF_SCREEN_TOP_INSET:h;
+        try { return new DisplaySettings(w,h,Math.min(virtualWidth,w)&~1,Math.min(virtualHeight,maxHeight)&~1,dpi,backgroundColor,keepPhoneDpi,lightBackgroundColor); }
         catch(IllegalArgumentException e) { return this; }
     }
     public int contentTop(){return height-virtualHeight;}

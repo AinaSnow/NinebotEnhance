@@ -42,11 +42,12 @@ final class LampTests {
         CoreTests.check(!new LampSettings("A1:B2:C3:D4:E5:F6","12345",1,2,false,true).bound()&&!new LampSettings("nonsense","123456",1,2,false,true).bound(),"a half filled binding is not usable");
         CoreTests.check(new LampSettings("A1:B2:C3:D4:E5:F6","123456",99,99,false,true).speed()==LampSettings.MAX_SPEED
                 &&new LampSettings("A1:B2:C3:D4:E5:F6","123456",0,0,false,true).steps()==LampSettings.MIN_STEPS,"speed and step count are clamped to their ranges");
-        LampSettings mapped=new LampSettings("A1:B2:C3:D4:E5:F6","123456",10,5,false,true);
-        CoreTests.check(mapped.displayPercent(73,0,73)==100&&mapped.displayPercent(0,0,73)==0&&mapped.displayPercent(80,0,73)==100&&mapped.displayPercent(-1,0,73)==-1,"the reported travel range remaps onto 100% and the top of travel reads full");
-        CoreTests.check(mapped.displayPercent(37,0,73)==Math.round(37*100f/73)&&mapped.stepUnits(0,73)==Math.round(73/5f)&&mapped.stepPercent()==20,"a mid height scales onto the range and one notch is the range split into the step count");
-        LampSettings flipped=new LampSettings("A1:B2:C3:D4:E5:F6","123456",10,5,true,true);
-        CoreTests.check(flipped.displayPercent(0,0,73)==100&&flipped.displayPercent(73,0,73)==0,"reversing swaps which end of the travel reads as full brightness");
+        LampSettings mapped=new LampSettings("A1:B2:C3:D4:E5:F6","123456",10,8,false,true);
+        CoreTests.check(LampSettings.topLimit(0,73)==72&&LampSettings.topLimit(73,0)==72&&LampSettings.topLimit(10,11)==11&&LampSettings.topLimit(5,5)==5&&LampSettings.DEFAULT_STEPS==8&&LampSettings.MIN_STEPS==5&&LampSettings.MAX_STEPS==15,"the usable top is one unit under the reported limit and the step range is 5-15");
+        CoreTests.check(mapped.displayPercent(73,0,73)==100&&mapped.displayPercent(72,0,73)==100&&mapped.displayPercent(0,0,73)==0&&mapped.displayPercent(80,0,73)==100&&mapped.displayPercent(-1,0,73)==-1,"the reported travel range remaps onto 100% and the top of travel reads full");
+        CoreTests.check(mapped.displayPercent(36,0,73)==50&&mapped.stepUnits(0,73)==Math.round(72/8f)&&mapped.stepPercent()==13,"a mid height scales onto the range and one notch is the range split into the step count");
+        LampSettings flipped=new LampSettings("A1:B2:C3:D4:E5:F6","123456",10,8,true,true);
+        CoreTests.check(flipped.displayPercent(0,0,73)==100&&flipped.displayPercent(72,0,73)==0&&flipped.displayPercent(73,0,73)==0,"reversing swaps which end of the travel reads as full brightness");
         CoreTests.check(LampSettings.advertisedName("A1:B2:C3:D4:E5:F6").equals("MOTORED4E5F6")&&LampSettings.advertisedName("nonsense").isEmpty(),"the advertising name is MOTORE plus the last three address bytes");
         CoreTests.check(TxLampProtocol.lampName("MOTORED4E5F6")&&TxLampProtocol.lampName("motore123")&&TxLampProtocol.lampName("MOTOR")
                 &&!TxLampProtocol.lampName("MOTO")&&!TxLampProtocol.lampName("Mi Band")&&!TxLampProtocol.lampName(null)&&!TxLampProtocol.lampName(""),"the scan matches the MOTOR name stem whatever its case");

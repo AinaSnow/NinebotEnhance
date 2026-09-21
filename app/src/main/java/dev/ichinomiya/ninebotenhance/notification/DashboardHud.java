@@ -55,6 +55,10 @@ public final class DashboardHud {
     private BatteryTelemetry.Snapshot battery=BatteryTelemetry.EMPTY;
     private WidgetSettings widgets=WidgetSettings.DEFAULT;
     private volatile List<SidebarLayout.Box> occlusions=SidebarLayout.DEFAULT_OCCLUSIONS;
+    /** Set from the frame the HUD is drawn into: portrait frames use the single-column half-screen layout. */
+    private volatile boolean halfScreen;
+    public boolean halfScreen(){return halfScreen;}
+    private void adopt(SidebarLayout.Fit fit){if(fit.halfScreen()!=halfScreen){halfScreen=fit.halfScreen();timeline.clear();revision++;}}
     /** Dashboard-painted rectangles in the 848 x 480 reference frame; empty or null restores the calibrated instrument card. */
     public void setOcclusions(List<SidebarLayout.Box> boxes){occlusions=boxes==null||boxes.isEmpty()?SidebarLayout.DEFAULT_OCCLUSIONS:List.copyOf(boxes);}
     public List<SidebarLayout.Box> occlusions(){return occlusions;}
@@ -82,7 +86,7 @@ public final class DashboardHud {
         if(!Objects.equals(ride,snapshot)){ride=snapshot;revision++;}
         if(snapshot!=null){if(snapshot.speedTenths()>=0)sample(speedHistory,snapshot.speedAt(),snapshot.speedKmh());if(snapshot.hasPower())sample(powerHistory,snapshot.powerAt(),snapshot.power());}
     }
-    public synchronized boolean hillHold(long now){return widgets.enabled(WidgetSettings.HILL_HOLD_DODGE)&&detector.update(ride,now,widgets.holdPowerMin(),widgets.holdPowerMax(),widgets.holdSpeedMaxTenths(),widgets.holdMs());}
+    public synchronized boolean hillHold(long now){return !halfScreen&&widgets.enabled(WidgetSettings.HILL_HOLD_DODGE)&&detector.update(ride,now,widgets.holdPowerMin(),widgets.holdPowerMax(),widgets.holdSpeedMaxTenths(),widgets.holdMs());}
     /** Debug register table; null or empty hides it. Equal snapshots do not re-encode. */
     public synchronized void acceptProbe(List<RegisterProbe.Row> rows){if(!Objects.equals(probeRows,rows)){probeRows=rows;revision++;}}
     private boolean probeShown(){return probeRows!=null&&!probeRows.isEmpty()&&widgets.enabled(WidgetSettings.REGISTER_PROBE);}
@@ -226,8 +230,8 @@ public final class DashboardHud {
     public synchronized boolean animating(long now){sync(now);return !cards(now).isEmpty()||phoneMotion.animating(now)||musicMotion.animating(now)||voltageMotion.animating(now)||tyreMotion.animating(now)||speedMotion.animating(now)||powerMotion.animating(now)||lampMotion.animating(now)||volumeAnimating(now);}
     public synchronized String summary(long now){return "notifications="+receiving+" visible="+timeline.entries(now).size()+" phone="+(phone!=null)+" phonePermission="+(phone!=null&&phone.getBoolean("phone_permission"))+" ageMs="+(lastUpdate==0?-1:now-lastUpdate);}
     public synchronized void draw(Canvas canvas,int width,int height,long now){
-        if(width<=0||height<=0)return;int save=canvas.save();
-        try{canvas.clipRect(0,0,width,height);float scale=Math.min(width/848f,height/480f);canvas.translate(width-848*scale,height-480*scale);canvas.scale(scale,scale);
+        if(!SidebarLayout.fits(width,height))return;SidebarLayout.Fit fit=SidebarLayout.fit(width,height);adopt(fit);int save=canvas.save();
+        try{canvas.clipRect(0,0,width,height);float scale=fit.scale();canvas.translate(fit.dx(),fit.dy());canvas.scale(scale,scale);
             List<NotificationTimeline.Entry<Card>> cards=cards(now);SidebarLayout.Stack actual=layout(cards,now);
             float dx=hillHold(now)&&actual.notificationDodged()?SidebarLayout.dodgeShift():0,dyN=actual.notificationBottom()-SidebarLayout.BOTTOM;
             drawCard(canvas,lampMotion,now,box->drawLamp(canvas,box));
@@ -257,7 +261,7 @@ public final class DashboardHud {
         c.restoreToCount(saved);
     }
     private Bitmap card(Bundle b){
-        int width=notificationWidth,height=(int)SidebarLayout.NOTIFICATION_HEIGHT;Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);bitmap.setDensity(Bitmap.DENSITY_NONE);Canvas c=new Canvas(bitmap);surface(c,0,0,width,height,12);
+        int width=SidebarLayout.notificationWidth(notificationWidth,halfScreen),height=(int)SidebarLayout.NOTIFICATION_HEIGHT;Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);bitmap.setDensity(Bitmap.DENSITY_NONE);Canvas c=new Canvas(bitmap);surface(c,0,0,width,height,12);
         paint.setColor(p.accent());c.drawRoundRect(0,12,2,48,1,1,paint);
         Bitmap icon=b.getParcelable("icon",Bitmap.class);if(icon!=null&&!icon.isRecycled())c.drawBitmap(icon,null,new RectF(12,12,48,48),paint);else{paint.setColor(p.iconBox());c.drawRoundRect(12,12,48,48,10,10,paint);write(c,"N",23,37,18,p.iconGlyph(),true);}
         String app=fit(b.getString("app",""),Math.min(120,(width-80)*.4f),13,false);float appWidth=measure(app,13,false);write(c,app,width-12-appWidth,22,13,p.label(),false);
@@ -445,7 +449,8 @@ public final class DashboardHud {
     private void bar(Canvas c,float x,float y,float width,float height,float fraction){paint.setStyle(Paint.Style.FILL);paint.setColor(p.track());c.drawRoundRect(x,y,x+width,y+height,height/2,height/2,paint);paint.setColor(p.accent());c.drawRoundRect(x,y,x+width*Math.max(0,Math.min(1,fraction)),y+height,height/2,height/2,paint);}
     /** Display-only HUD consumes touches so they cannot reach the application behind it; cards use their settled targets. */
     public synchronized Bundle touch(float x,float y,int width,int height,long now){
-        float scale=Math.min(width/848f,height/480f);if(scale<=0)return null;x=(x-(width-848*scale))/scale;y=(y-(height-480*scale))/scale;
+        if(!SidebarLayout.fits(width,height))return null;
+        SidebarLayout.Fit fit=SidebarLayout.fit(width,height);adopt(fit);float scale=fit.scale();x=(x-fit.dx())/scale;y=(y-fit.dy())/scale;
         Bundle hit=new Bundle();hit.putString("command","block");
         List<NotificationTimeline.Entry<Card>> cards=cards(now);SidebarLayout.Stack stack=layout(cards,now);
         float dx=hillHold(now)&&stack.notificationDodged()?SidebarLayout.dodgeShift():0,dyN=stack.notificationBottom()-SidebarLayout.BOTTOM;
@@ -462,7 +467,7 @@ public final class DashboardHud {
      */
     private SidebarLayout.Stack layout(List<NotificationTimeline.Entry<Card>> cards,long now){
         float lift=lift(cards,now);boolean hold=hillHold(now);
-        SidebarLayout.Stack actual=SidebarLayout.arrange(widgets,visibleMask(now),lift,sizes(),hold,occlusions);
+        SidebarLayout.Stack actual=SidebarLayout.arrange(widgets,visibleMask(now),lift,halfScreen?SidebarLayout.fullWidth():sizes(),hold,occlusions,halfScreen);
         phoneMotion.target(actual.phone(),now);musicMotion.target(actual.music(),now);voltageMotion.target(actual.voltage(),now);tyreMotion.target(actual.tyres(),now);speedMotion.target(actual.speed(),now);powerMotion.target(actual.power(),now);lampMotion.target(actual.lamp(),now);
         actualStack=actual;return actual;
     }

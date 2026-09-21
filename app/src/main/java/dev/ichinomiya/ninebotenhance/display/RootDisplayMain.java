@@ -164,7 +164,7 @@ public final class RootDisplayMain {
         if (display == null || display.getDisplay() == null) throw new IllegalStateException("系统拒绝创建虚拟显示器");
         displayId = display.getDisplay().getDisplayId();
         if (displayId <= 0) throw new IllegalStateException("系统返回了非独立显示器");
-        log("DISPLAY created id=" + displayId + " buffer=" + settings.label() + " flags=0x" + Integer.toHexString(flags));
+        log("DISPLAY created id=" + displayId + " buffer=" + settings.label() + " flags=0x" + Integer.toHexString(flags) + " sharedMemory=" + sharedMemoryStatus);
         applyRenderPlan(manager);
         try {
             displayOrientation = new RootDisplayOrientation(display.getDisplay(), this::log);
@@ -489,7 +489,25 @@ public final class RootDisplayMain {
         if (metrics.densityDpi < 100 || metrics.densityDpi > 1000) throw new IllegalStateException("手机主屏密度异常：" + metrics.densityDpi);
         return metrics.densityDpi;
     }
+    private static String sharedMemoryStatus = "unchecked";
+    /**
+     * Android 16 and later back several framework caches with {@code com.android.internal.os.ApplicationSharedMemory}. Only
+     * {@code ActivityThread.attach} of a real application installs the region an app_process daemon has none, so the framework
+     * throws "ApplicationSharedMemory not initialized" on first use. The daemon creates its own region before any framework call.
+     */
+    private static String initApplicationSharedMemory() {
+        Class<?> type;
+        try { type = Class.forName("com.android.internal.os.ApplicationSharedMemory"); }
+        catch (ClassNotFoundException e) { try { type = Class.forName("android.app.ApplicationSharedMemory"); } catch (ClassNotFoundException e2) { return "absent"; } }
+        try { if (type.getMethod("getInstance").invoke(null) != null) return "present"; } catch (Throwable ignored) { /* not initialized */ }
+        try {
+            Object instance = type.getMethod("create").invoke(null);
+            type.getMethod("setInstance", type).invoke(null, instance);
+            return "created";
+        } catch (Throwable e) { return "unavailable " + Ipc.error(e); }
+    }
     private static Context createShellContext() throws Exception {
+        sharedMemoryStatus = initApplicationSharedMemory();
         // A minimal ActivityThread and ConfigurationController, following scrcpy's app_process workarounds.
         Class<?> type = Class.forName("android.app.ActivityThread"); Constructor<?> ctor = type.getDeclaredConstructor(); ctor.setAccessible(true);
         Object thread = ctor.newInstance(); field(type, "sCurrentActivityThread").set(null, thread); field(type, "mSystemThread").setBoolean(thread, true);

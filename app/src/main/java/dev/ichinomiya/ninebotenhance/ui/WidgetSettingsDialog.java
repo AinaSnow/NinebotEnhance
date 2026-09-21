@@ -31,7 +31,9 @@ public final class WidgetSettingsDialog {
         Button reads=new Button(activity);reads.setText("数据读取设置");theme.button(reads,null);reads.setTextSize(14);
         reads.setOnClickListener(v->WidgetOptionsDialog.reads(activity,frames,reference));
         LinearLayout.LayoutParams readParams=new LinearLayout.LayoutParams(-1,-2);readParams.topMargin=MirrorUi.dp(activity,8);readParams.bottomMargin=MirrorUi.dp(activity,8);content.addView(reads,readParams);
-        content.addView(row(activity,frames,reference,theme,settings,WidgetSettings.HILL_HOLD_DODGE,checks,null,null),rowParams(activity));
+        LinearLayout hold=(LinearLayout)row(activity,frames,reference,theme,settings,WidgetSettings.HILL_HOLD_DODGE,checks,null,null);
+        if(frames.halfScreen())for(int i=0;i<hold.getChildCount();i++)hold.getChildAt(i).setEnabled(false);
+        content.addView(hold,rowParams(activity));
         // Live phone navigation relayed to the dashboard (preference navi_live, default on); saved with the rest of the dialog.
         CheckBox naviLive=new CheckBox(activity);naviLive.setText("手机导航上仪表");naviLive.setTextColor(theme.text);naviLive.setTextSize(16);
         naviLive.setButtonTintList(android.content.res.ColorStateList.valueOf(theme.accent));naviLive.setChecked(frames.naviLive());

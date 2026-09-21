@@ -363,6 +363,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
     }
     public void settings(Activity activity, View card) {
         if (!usable(activity)) return;
+        if (!frames.noticeAccepted()) { OpenSourceNoticeDialog.show(activity, card, frames, () -> settings(activity, card)); return; }
         if (permissionCheck.active()) cancelPermissionCheck();
         DisplaySettings cached = frames.cachedSettings();
         MirrorUi theme = new MirrorUi(activity, card);

@@ -1,8 +1,11 @@
 package dev.ichinomiya.ninebotenhance.ui;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.view.View;
 import android.widget.*;
+import dev.ichinomiya.ninebotenhance.core.OpenSourceNotice;
 import dev.ichinomiya.ninebotenhance.ipc.Protocol;
 import dev.ichinomiya.ninebotenhance.platform.ModuleResources;
 import dev.ichinomiya.ninebotenhance.client.FrameClient;
@@ -44,6 +47,13 @@ public final class AboutDialog {
         naviTest.setOnCheckedChangeListener((button, checked) -> frames.saveNaviTest(checked));
         version.setOnClickListener(v -> { if (frames.debugVersionTap()) { debug.setVisibility(View.VISIBLE); probeRow.setVisibility(View.VISIBLE); naviTest.setVisibility(View.VISIBLE); } });
         content.addView(DialogContent.text(activity, theme, "为九号出行添加应用投屏、系统录屏、虚拟屏预览与输入、会话统计。", 15));
+        TextView repository = DialogContent.text(activity, theme, OpenSourceNotice.REPOSITORY, 13); repository.setTextColor(theme.accent);
+        repository.setOnClickListener(v -> {
+            try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(OpenSourceNotice.REPOSITORY))); }
+            catch (RuntimeException e) { Toast.makeText(activity, OpenSourceNotice.REPOSITORY, Toast.LENGTH_LONG).show(); }
+        });
+        content.addView(repository);
+        TextView authors = DialogContent.text(activity, theme, "作者 " + OpenSourceNotice.AUTHORS, 13); authors.setTextColor(theme.secondary); content.addView(authors);
         TextView copyright = DialogContent.text(activity, theme, "Copyright 2026 Ninebot Enhance contributors\nApache License 2.0\n本项目不是九号官方产品。", 13);
         copyright.setTextColor(theme.secondary); content.addView(copyright);
         resourceButton(activity, theme, content, "开源许可证", "META-INF/licenses/NinebotEnhance-Apache-2.0.txt");

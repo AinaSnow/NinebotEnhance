@@ -205,6 +205,12 @@ public final class FrameClient {
         if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean("navi_test",value).apply();
         report("NAVITEST switch "+(value?"on":"off"));
     }
+    /** The one-time open-source sentence lives with the other host-side settings, so it is asked once per Ninebot install. */
+    public boolean noticeAccepted(){return context!=null&&context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).getBoolean(dev.ichinomiya.ninebotenhance.core.OpenSourceNotice.KEY,false);}
+    public void saveNoticeAccepted(){
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putBoolean(dev.ichinomiya.ninebotenhance.core.OpenSourceNotice.KEY,true).apply();
+        report("NOTICE accepted");
+    }
     /** Preview helper: one synthetic notification card rendered locally, independent of the phone mailbox. */
     private int marks;
     /** Also a timestamp marker for register probing: tap it right after each action on the vehicle and read the MARK lines back in the log. */

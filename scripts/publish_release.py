@@ -7,6 +7,22 @@ import subprocess
 
 from package_artifacts import ROOT, git, sha256
 
+def changelog(version):
+    """The `## <version>` section of CHANGELOG.md, empty when the file or the section is missing."""
+    path = ROOT / 'CHANGELOG.md'
+    if not path.exists():
+        return ''
+    out, inside = [], False
+    for line in path.read_text(encoding='utf-8').splitlines():
+        if line.startswith('## '):
+            if inside:
+                break
+            inside = line[3:].strip().split()[0] == version
+            continue
+        if inside:
+            out.append(line)
+    return '\n'.join(out).strip()
+
 def main():
     if os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch') or os.environ.get('GITHUB_REF') != 'refs/heads/main':
         raise SystemExit('Release publication requires a push or manual workflow on main')
@@ -45,7 +61,8 @@ def main():
                 output.write('\n' + message + '\n')
         return
     notes = ROOT / 'build/release-notes.md'
-    notes.write_text(f'Ninebot Enhance {version}\n\n安装包、对应源码和 SHA-256 校验值见附件。\n\n'
+    section = changelog(version)
+    notes.write_text(f'Ninebot Enhance {version}\n\n' + (section + '\n\n' if section else '') + '安装包、对应源码和 SHA-256 校验值见附件。\n\n'
                      f'构建提交：`{info["commit"]}`\n\n通过 {info["host_assertions"]} 项主机断言；主机检查不代替设备实测。\n', encoding='utf-8')
     command = ['gh', 'release', 'create', tag, '--repo', repository, '--target', info['commit'], '--title', f'Ninebot Enhance {version}', '--notes-file', str(notes)]
     if '-' in version:

@@ -108,7 +108,7 @@ def main():
         assert f"package: name='{PACKAGE}'" in badging and f"versionCode='{code}'" in badging and f"versionName='{name}'" in badging
         assert "application-label:'Ninebot Enhance'" in badging and 'launchable-activity:' not in badging
         manifest=run([tool(bt,'aapt2'),'dump','xmltree',apk,'--file','AndroidManifest.xml'],records)
-        assert len(re.findall(r'^\s*E: activity\s',manifest,re.MULTILINE)) == 4
+        assert len(re.findall(r'^\s*E: activity\s',manifest,re.MULTILINE)) == 5
         assert '.ui.LaunchAppPickerActivity' in manifest
         assert '.ui.NotificationSettingsActivity' in manifest and '.notification.MirrorNotificationListener' in manifest
         assert 'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE' in manifest

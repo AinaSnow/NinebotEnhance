@@ -7,7 +7,7 @@ Ninebot Enhance 的首个发布版本为 **1.0.0**，Git 发布标签为 `v1.0.0
 - 项目名：`Ninebot Enhance`。
 - 包名：`dev.ichinomiya.ninebotenhance`。
 - `version.properties` 与 `ipc/Protocol.java` 中的版本名称、版本代码必须一致，构建脚本会自动核对。
-- 当前发布版本为 `1.1.2`，Android `versionCode=40`，使用原签名覆盖安装；它让「保持 DPI」在系统拒绝强制显示尺寸时降级而不中断投屏，并新增「兼容缩放」备用路径（副屏按渲染尺寸创建、采集时缩回），失败后自动固定启用。
+- 当前发布版本为 `1.1.3`，Android `versionCode=41`，使用原签名覆盖安装；改动见 `CHANGELOG.md`，发布页正文取其中对应版本的段落。
 - 发布使用固定签名，公开 SHA-256 指纹保存在 `release-signing-certificate.txt`。
 - 私钥与密码保存在 Git 忽略的 `signing/`，后续更新继续使用同一密钥。
 
@@ -43,6 +43,7 @@ PowerShell 使用 `$env:JAVA_HOME`、`$env:ANDROID_HOME` 和 `gradlew.bat`。Gra
 ### 发布新版
 
 1. 更新 `version.properties` 和 `Protocol.java` 中的版本名称，并递增版本代码。
+   在 `CHANGELOG.md` 顶部加一个 `## <版本>` 段落，发布脚本把它作为 Release 正文；没有段落时退回固定说明。
 2. 将修改推送或合并到 `main`，等待 `Build and Release` 完成。
 3. 从仓库 Releases 页面下载新版本。也可以在 **Actions → Build and Release → Run workflow** 中选择 `main` 主动运行，无需再勾选发布选项。
 

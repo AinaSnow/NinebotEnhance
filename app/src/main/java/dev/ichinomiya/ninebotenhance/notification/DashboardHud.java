@@ -15,6 +15,9 @@ import dev.ichinomiya.ninebotenhance.core.HillHoldDetector;
 import dev.ichinomiya.ninebotenhance.core.WidgetSettings;
 import dev.ichinomiya.ninebotenhance.core.HudPalette;
 import dev.ichinomiya.ninebotenhance.core.LampState;
+import dev.ichinomiya.ninebotenhance.core.BmsCard;
+import dev.ichinomiya.ninebotenhance.core.BmsSettings;
+import dev.ichinomiya.ninebotenhance.core.BmsState;
 import dev.ichinomiya.ninebotenhance.core.WidgetCondition;
 import dev.ichinomiya.ninebotenhance.core.SidebarLayout;
 import java.util.*;
@@ -40,11 +43,20 @@ public final class DashboardHud {
     private String epoch="",session="";private long cursor=-1,revision,lastUpdate;private Bundle phone,music;
     private Bitmap artwork;private long artRevision=-1;private int notificationWidth=NotificationTimeline.DEFAULT_WIDTH;
     private boolean receiving;private int simulated;private long simulatedUntil;private int simulatedDuration=15000;
-    private CardMotion phoneMotion=new CardMotion(),musicMotion=new CardMotion(),voltageMotion=new CardMotion(),tyreMotion=new CardMotion(),speedMotion=new CardMotion(),powerMotion=new CardMotion(),lampMotion=new CardMotion();
+    private CardMotion phoneMotion=new CardMotion(),musicMotion=new CardMotion(),voltageMotion=new CardMotion(),tyreMotion=new CardMotion(),speedMotion=new CardMotion(),powerMotion=new CardMotion(),lampMotion=new CardMotion(),bmsMotion=new CardMotion();
     /** Lamp link and the height it last reported; it arrives with the dashboard snapshot, never estimated here. */
     private LampState lamp=LampState.NONE;
     /** Displayed brightness 0–100 the module computed from the raw height, its usable range and its reverse flag; -1 when unknown. */
     private int lampPercent=-1;
+    /** BMS link and its last reading from the dashboard snapshot; the card layout and the BMS-first switches are module settings. */
+    private BmsState bms=BmsState.NONE;private int bmsPollMs=BmsSettings.DEFAULT_POLL_MS;private BmsCard.Layout bmsLayout=BmsCard.DEFAULT;
+    private final BmsCardPainter bmsPainter=new BmsCardPainter();
+    public synchronized void setBmsLayout(BmsCard.Layout value){if(value!=null&&!bmsLayout.equals(value)){bmsLayout=value;revision++;}}
+    private boolean bmsFresh(long now){return bms.connected(now,bmsPollMs*3L+1000);}
+    private boolean voltageFromBms(long now){return widgets.enabled(WidgetSettings.VOLTAGE_FROM_BMS)&&bmsFresh(now);}
+    private boolean powerFromBms(long now){return widgets.enabled(WidgetSettings.POWER_FROM_BMS)&&bmsFresh(now);}
+    private float voltageValue(long now){if(voltageFromBms(now))return bms.data().volts();return expired(battery.voltage(),now)?Float.NaN:battery.voltage().number();}
+    private float powerValue(long now){if(powerFromBms(now))return bms.data().watts();return powerExpired(now)?Float.NaN:ride.power();}
     /** Per-widget windows opened by change conditions, indexed like WidgetSettings.CONDITIONAL; rest and lifted layouts of the last sync. */
     private final long[] shownUntil=new long[WidgetSettings.CONDITIONAL.length];private String musicKeyShown="";private boolean musicMovingShown;
     private SidebarLayout.Stack actualStack;
@@ -66,14 +78,14 @@ public final class DashboardHud {
     public synchronized void reset(){reset("");}
     public synchronized void reset(String request){
         session=request;timeline.clear();phone=music=null;tires=TireTelemetry.EMPTY;battery=BatteryTelemetry.EMPTY;artwork=null;artRevision=-1;epoch="";cursor=-1;receiving=false;lastUpdate=0;simulatedUntil=0;
-        phoneMotion=new CardMotion();musicMotion=new CardMotion();voltageMotion=new CardMotion();tyreMotion=new CardMotion();speedMotion=new CardMotion();powerMotion=new CardMotion();lampMotion=new CardMotion();detector.reset();
+        phoneMotion=new CardMotion();musicMotion=new CardMotion();voltageMotion=new CardMotion();tyreMotion=new CardMotion();speedMotion=new CardMotion();powerMotion=new CardMotion();lampMotion=new CardMotion();bmsMotion=new CardMotion();detector.reset();
         ride=null;Arrays.fill(shownUntil,0);musicKeyShown="";musicMovingShown=false;volumeSeq=-1;volumeShownAt=volumeShownUntil=-1;volumeFillAt=0;volumeFillFrom=volumeFillTo=0;revision++;
     }
     public synchronized void acceptTires(TireTelemetry.Snapshot snapshot){if(snapshot==null)snapshot=TireTelemetry.EMPTY;if(!tires.equals(snapshot)){tires=snapshot;revision++;}}
     public synchronized void acceptBattery(BatteryTelemetry.Snapshot snapshot){
         if(snapshot==null)snapshot=BatteryTelemetry.EMPTY;if(battery.equals(snapshot))return;
         battery=snapshot;revision++;BatteryTelemetry.Value voltage=snapshot.voltage();
-        if(voltage!=null)sample(voltageHistory,voltage.elapsedTime(),voltage.number());
+        if(voltage!=null&&!widgets.enabled(WidgetSettings.VOLTAGE_FROM_BMS))sample(voltageHistory,voltage.elapsedTime(),voltage.number());
     }
     /** One chart sample per received value; histories outlive sessions and forget anything past the longest chart window. */
     private static void sample(ArrayDeque<Sample> history,long at,float value){
@@ -84,7 +96,7 @@ public final class DashboardHud {
     /** Latest speed/power readings; hill hold moves the cards away from the dashboard toast while the dodge switch is on. */
     public synchronized void acceptRide(RideState.Snapshot snapshot){
         if(!Objects.equals(ride,snapshot)){ride=snapshot;revision++;}
-        if(snapshot!=null){if(snapshot.speedTenths()>=0)sample(speedHistory,snapshot.speedAt(),snapshot.speedKmh());if(snapshot.hasPower())sample(powerHistory,snapshot.powerAt(),snapshot.power());}
+        if(snapshot!=null){if(snapshot.speedTenths()>=0)sample(speedHistory,snapshot.speedAt(),snapshot.speedKmh());if(snapshot.hasPower()&&!widgets.enabled(WidgetSettings.POWER_FROM_BMS))sample(powerHistory,snapshot.powerAt(),snapshot.power());}
     }
     public synchronized boolean hillHold(long now){return !halfScreen&&widgets.enabled(WidgetSettings.HILL_HOLD_DODGE)&&detector.update(ride,now,widgets.holdPowerMin(),widgets.holdPowerMax(),widgets.holdSpeedMaxTenths(),widgets.holdMs());}
     /** Debug register table; null or empty hides it. Equal snapshots do not re-encode. */
@@ -119,6 +131,15 @@ public final class DashboardHud {
                 lampState.getInt("speed",-1),lampState.getInt("low",-1),lampState.getInt("high",-1),lampState.getString("detail",""));
         int nextPercent=lampState==null?-1:lampState.getInt("percent",-1);
         if(!lamp.equals(nextLamp)||lampPercent!=nextPercent){lamp=nextLamp;lampPercent=nextPercent;revision++;}
+        Bundle bmsBundle=state.getBundle("bms");BmsState nextBms=BmsBundle.read(bmsBundle);int nextPoll=BmsBundle.pollMs(bmsBundle);
+        if(!bms.equals(nextBms)||(nextPoll>0&&bmsPollMs!=nextPoll)){
+            boolean reading=nextBms.data().known()&&nextBms.data().at()!=bms.data().at();
+            bms=nextBms;if(nextPoll>0)bmsPollMs=nextPoll;revision++;
+            if(reading){
+                if(widgets.enabled(WidgetSettings.VOLTAGE_FROM_BMS))sample(voltageHistory,nextBms.data().at(),nextBms.data().volts());
+                if(widgets.enabled(WidgetSettings.POWER_FROM_BMS))sample(powerHistory,nextBms.data().at(),nextBms.data().watts());
+            }
+        }
         Bundle volume=state.getBundle("volume");
         if(volume!=null){long seq=volume.getLong("seq",-1);
             // The first snapshot of a session only records the level; later sequence numbers mean the user changed it.
@@ -160,9 +181,9 @@ public final class DashboardHud {
         WidgetCondition c=widgets.condition(widget);
         return switch(c.mode()){
             case WidgetCondition.ON_CHANGE->now<shownUntil[WidgetSettings.index(widget)];
-            case WidgetCondition.WHILE->c.matches(new WidgetCondition.Measurements(speedExpired(now)?Float.NaN:ride.speedKmh(),powerExpired(now)?Float.NaN:ride.power(),expired(battery.voltage(),now)?Float.NaN:battery.voltage().number(),
+            case WidgetCondition.WHILE->c.matches(new WidgetCondition.Measurements(speedExpired(now)?Float.NaN:ride.speedKmh(),powerValue(now),voltageValue(now),
                     volumeSeq<0?Float.NaN:volumeLevel*100f/volumeMax,musicActive()&&MusicPlayback.moving(music.getInt("state")),
-                    tyre(tires.front().pressure(),now),tyre(tires.rear().pressure(),now),tyre(tires.front().temperature(),now),tyre(tires.rear().temperature(),now)));
+                    tyre(tires.front().pressure(),now),tyre(tires.rear().pressure(),now),tyre(tires.front().temperature(),now),tyre(tires.rear().temperature(),now),bmsFresh(now)));
             default->true;
         };
     }
@@ -174,7 +195,7 @@ public final class DashboardHud {
         // With the "always" condition the music card stays as an idle card when no media session exists.
         if(widgets.enabled(WidgetSettings.MUSIC)&&(musicActive()?conditionMet(WidgetSettings.MUSIC,now):widgets.condition(WidgetSettings.MUSIC).mode()==WidgetCondition.ALWAYS))mask|=WidgetSettings.MUSIC;
         if(widgets.showsTyres()&&conditionMet(WidgetSettings.TYRES,now))mask|=WidgetSettings.TYRES;
-        for(int w:new int[]{WidgetSettings.VOLTAGE,WidgetSettings.SPEED,WidgetSettings.POWER,WidgetSettings.NOTIFICATIONS,WidgetSettings.VOLUME,WidgetSettings.LAMP})if(widgets.enabled(w)&&conditionMet(w,now))mask|=w;
+        for(int w:new int[]{WidgetSettings.VOLTAGE,WidgetSettings.SPEED,WidgetSettings.POWER,WidgetSettings.NOTIFICATIONS,WidgetSettings.VOLUME,WidgetSettings.LAMP,WidgetSettings.BMS})if(widgets.enabled(w)&&conditionMet(w,now))mask|=w;
         return mask;
     }
     private boolean visible(int widget,long now){return (visibleMask(now)&widget)!=0;}
@@ -213,8 +234,8 @@ public final class DashboardHud {
         sync(now);
         long tick=animating(now)?now/50:musicMoving(now)||chartLive(now)||probeShown()?now/1000:0;
         long flags=expiryFlags(now)|(hillHold(now)?1024:0)|(volumeVisible(now)?2048:0)|((long)visibleBits(now)<<12);
-        // Nine conditional widgets need 21 flag bits; the tick keeps the rest of the 44 below the revision.
-        return(revision<<44)^((flags&0x1FFFFFL)<<23)^(tick&0x7FFFFFL);
+        // Ten conditional widgets need 22 flag bits; the tick keeps the rest of the 44 below the revision.
+        return(revision<<44)^((flags&0x3FFFFFL)<<22)^(tick&0x3FFFFFL);
     }
     private static boolean expired(long elapsedTime,long now,long limit){return now-elapsedTime>limit;}
     private boolean expired(TireTelemetry.Value value,long now){return value==null||expired(value.elapsedTime(),now,widgets.tyreLimitMs());}
@@ -222,18 +243,20 @@ public final class DashboardHud {
     private int expiryFlags(long now){
         int flags=0;
         if(widgets.showsTyres())flags|=(expired(tires.front().pressure(),now)?1:0)|(expired(tires.front().temperature(),now)?2:0)|(expired(tires.rear().pressure(),now)?4:0)|(expired(tires.rear().temperature(),now)?8:0);
-        if(widgets.enabled(WidgetSettings.VOLTAGE))flags|=expired(battery.voltage(),now)?16:0;
+        if(widgets.enabled(WidgetSettings.VOLTAGE))flags|=(voltageFromBms(now)?false:expired(battery.voltage(),now))?16:0;
+        if(widgets.enabled(WidgetSettings.BMS)||widgets.enabled(WidgetSettings.VOLTAGE_FROM_BMS)||widgets.enabled(WidgetSettings.POWER_FROM_BMS))flags|=bmsFresh(now)?0:32;
         if(widgets.enabled(WidgetSettings.SPEED))flags|=speedExpired(now)?256:0;
-        if(widgets.enabled(WidgetSettings.POWER))flags|=powerExpired(now)?512:0;
+        if(widgets.enabled(WidgetSettings.POWER))flags|=(powerFromBms(now)?false:powerExpired(now))?512:0;
         return flags;
     }
-    public synchronized boolean animating(long now){sync(now);return !cards(now).isEmpty()||phoneMotion.animating(now)||musicMotion.animating(now)||voltageMotion.animating(now)||tyreMotion.animating(now)||speedMotion.animating(now)||powerMotion.animating(now)||lampMotion.animating(now)||volumeAnimating(now);}
+    public synchronized boolean animating(long now){sync(now);return !cards(now).isEmpty()||phoneMotion.animating(now)||musicMotion.animating(now)||voltageMotion.animating(now)||tyreMotion.animating(now)||speedMotion.animating(now)||powerMotion.animating(now)||lampMotion.animating(now)||bmsMotion.animating(now)||volumeAnimating(now);}
     public synchronized String summary(long now){return "notifications="+receiving+" visible="+timeline.entries(now).size()+" phone="+(phone!=null)+" phonePermission="+(phone!=null&&phone.getBoolean("phone_permission"))+" ageMs="+(lastUpdate==0?-1:now-lastUpdate);}
     public synchronized void draw(Canvas canvas,int width,int height,long now){
         if(!SidebarLayout.fits(width,height))return;SidebarLayout.Fit fit=SidebarLayout.fit(width,height);adopt(fit);int save=canvas.save();
         try{canvas.clipRect(0,0,width,height);float scale=fit.scale();canvas.translate(fit.dx(),fit.dy());canvas.scale(scale,scale);
             List<NotificationTimeline.Entry<Card>> cards=cards(now);SidebarLayout.Stack actual=layout(cards,now);
             float dx=hillHold(now)&&actual.notificationDodged()?SidebarLayout.dodgeShift():0,dyN=actual.notificationBottom()-SidebarLayout.BOTTOM;
+            drawCard(canvas,bmsMotion,now,box->drawBms(canvas,now,box));
             drawCard(canvas,lampMotion,now,box->drawLamp(canvas,box));
             drawCard(canvas,powerMotion,now,box->drawPower(canvas,now,box));
             drawCard(canvas,speedMotion,now,box->drawSpeed(canvas,now,box));
@@ -344,13 +367,13 @@ public final class DashboardHud {
     }
     private void drawVoltage(Canvas c,long now,SidebarLayout.Box box){
         BatteryTelemetry.Value voltage=battery.voltage();
-        drawMetric(c,now,box,"电压",expired(voltage,now)?"--":BatteryTelemetry.voltage(voltage),"V",voltageHistory,widgets.enabled(WidgetSettings.VOLTAGE_CHART),widgets.chartWindowMs(),1,0.5f);
+        drawMetric(c,now,box,"电压",voltageFromBms(now)?String.format(Locale.ROOT,"%.1f",bms.data().volts()):expired(voltage,now)?"--":BatteryTelemetry.voltage(voltage),"V",voltageHistory,widgets.enabled(WidgetSettings.VOLTAGE_CHART),widgets.chartWindowMs(),1,0.5f);
     }
     private void drawSpeed(Canvas c,long now,SidebarLayout.Box box){
         drawMetric(c,now,box,"速度",speedExpired(now)?"--":String.format(Locale.ROOT,"%.1f",ride.speedKmh()),"km/h",speedHistory,widgets.enabled(WidgetSettings.SPEED_CHART),widgets.speedChartWindowMs(),1,1f);
     }
     private void drawPower(Canvas c,long now,SidebarLayout.Box box){
-        drawMetric(c,now,box,"功率",powerExpired(now)?"--":String.valueOf(ride.power()),"W",powerHistory,widgets.enabled(WidgetSettings.POWER_CHART),widgets.powerChartWindowMs(),0,50f);
+        drawMetric(c,now,box,"功率",powerFromBms(now)?String.valueOf(bms.data().watts()):powerExpired(now)?"--":String.valueOf(ride.power()),"W",powerHistory,widgets.enabled(WidgetSettings.POWER_CHART),widgets.powerChartWindowMs(),0,50f);
     }
     /** Height the hoist reported, or why it is not reporting one; the module never estimates a position locally. */
     private void drawLamp(Canvas c,SidebarLayout.Box box){
@@ -369,6 +392,9 @@ public final class DashboardHud {
         centerLine(c,value,contentLeft+VALUE_COLUMN,centerY,known?17:13,known?p.text():p.unit(),known);
         if(known)centerLine(c,"%",contentLeft+VALUE_COLUMN+measure(value,17,true)+4,centerY,11,p.unit(),false);
     }
+    /** The BMS card: its rows from the layout while a fresh reading exists, otherwise one line reading 未连接. */
+    private void drawBms(Canvas c,long now,SidebarLayout.Box box){bmsPainter.draw(c,p,box.left(),box.width(),bmsLayout,bms.data(),bmsFresh(now));}
+    private float bmsHeight(long now){return bmsPainter.height(bmsLayout,bmsFresh(now));}
     private String lampText(){return lamp.knownPosition()&&lampPercent>=0?String.valueOf(lampPercent):"未连接";}
     private float lampWidth(){
         boolean known=lamp.knownPosition()&&lampPercent>=0;String value=lampText();
@@ -445,7 +471,7 @@ public final class DashboardHud {
         return new PhoneLayout(width,simsX,slotX,batteryX,percentLeft,slot,count,known,percent);
     }
     private float phoneWidth(){return phone==null?0:phoneLayout(SIDEBAR_RIGHT).width();}
-    private SidebarLayout.Sizes sizes(){return new SidebarLayout.Sizes(phoneWidth(),musicWidth(),voltageWidth(),tyreWidth(),speedWidth(),powerWidth(),lampWidth());}
+    private SidebarLayout.Sizes sizes(){return new SidebarLayout.Sizes(phoneWidth(),musicWidth(),voltageWidth(),tyreWidth(),speedWidth(),powerWidth(),lampWidth(),SidebarLayout.WIDTH,bmsHeight(android.os.SystemClock.elapsedRealtime()));}
     private void bar(Canvas c,float x,float y,float width,float height,float fraction){paint.setStyle(Paint.Style.FILL);paint.setColor(p.track());c.drawRoundRect(x,y,x+width,y+height,height/2,height/2,paint);paint.setColor(p.accent());c.drawRoundRect(x,y,x+width*Math.max(0,Math.min(1,fraction)),y+height,height/2,height/2,paint);}
     /** Display-only HUD consumes touches so they cannot reach the application behind it; cards use their settled targets. */
     public synchronized Bundle touch(float x,float y,int width,int height,long now){
@@ -455,7 +481,7 @@ public final class DashboardHud {
         List<NotificationTimeline.Entry<Card>> cards=cards(now);SidebarLayout.Stack stack=layout(cards,now);
         float dx=hillHold(now)&&stack.notificationDodged()?SidebarLayout.dodgeShift():0,dyN=stack.notificationBottom()-SidebarLayout.BOTTOM;
         for(NotificationTimeline.Entry<Card> e:cards)if(notificationBox(e,now).contains(x-dx,y-dyN))return hit;
-        for(SidebarLayout.Box box:new SidebarLayout.Box[]{stack.phone(),stack.music(),stack.voltage(),stack.tyres(),stack.speed(),stack.power(),stack.lamp()})if(box!=null&&box.contains(x,y))return hit;
+        for(SidebarLayout.Box box:new SidebarLayout.Box[]{stack.phone(),stack.music(),stack.voltage(),stack.tyres(),stack.speed(),stack.power(),stack.lamp(),stack.bms()})if(box!=null&&box.contains(x,y))return hit;
         return null;
     }
     private SidebarLayout.Box notificationBox(NotificationTimeline.Entry<Card> entry,long now){return SidebarLayout.notification(entry.data.bitmap.getWidth(),entry.slot(now),entry.enter(now),entry.exit(now));}
@@ -467,8 +493,8 @@ public final class DashboardHud {
      */
     private SidebarLayout.Stack layout(List<NotificationTimeline.Entry<Card>> cards,long now){
         float lift=lift(cards,now);boolean hold=hillHold(now);
-        SidebarLayout.Stack actual=SidebarLayout.arrange(widgets,visibleMask(now),lift,halfScreen?SidebarLayout.fullWidth():sizes(),hold,occlusions,halfScreen);
-        phoneMotion.target(actual.phone(),now);musicMotion.target(actual.music(),now);voltageMotion.target(actual.voltage(),now);tyreMotion.target(actual.tyres(),now);speedMotion.target(actual.speed(),now);powerMotion.target(actual.power(),now);lampMotion.target(actual.lamp(),now);
+        SidebarLayout.Stack actual=SidebarLayout.arrange(widgets,visibleMask(now),lift,halfScreen?SidebarLayout.fullWidth(bmsHeight(now)):sizes(),hold,occlusions,halfScreen);
+        phoneMotion.target(actual.phone(),now);musicMotion.target(actual.music(),now);voltageMotion.target(actual.voltage(),now);tyreMotion.target(actual.tyres(),now);speedMotion.target(actual.speed(),now);powerMotion.target(actual.power(),now);lampMotion.target(actual.lamp(),now);bmsMotion.target(actual.bms(),now);
         actualStack=actual;return actual;
     }
     private void sync(long now){layout(cards(now),now);}

@@ -13,7 +13,7 @@ public record WidgetCondition(int mode,int triggers,int showSeconds,int checks,i
     /** Triggers of the ON_CHANGE mode. */
     public static final int VOLUME_CHANGE=1,TRACK_CHANGE=2,PLAYBACK_CHANGE=4,ALL_TRIGGERS=7;
     /** Checks of the WHILE mode: ranges plus "music is playing". */
-    public static final int SPEED=1,POWER=2,VOLTAGE=4,VOLUME=8,PLAYING=16,TYRE_FRONT_PRESSURE=32,TYRE_REAR_PRESSURE=64,TYRE_FRONT_TEMP=128,TYRE_REAR_TEMP=256,ALL_CHECKS=511;
+    public static final int SPEED=1,POWER=2,VOLTAGE=4,VOLUME=8,PLAYING=16,TYRE_FRONT_PRESSURE=32,TYRE_REAR_PRESSURE=64,TYRE_FRONT_TEMP=128,TYRE_REAR_TEMP=256,BMS_CONNECTED=512,ALL_CHECKS=1023;
     public static final int TYRE_CHECKS=TYRE_FRONT_PRESSURE|TYRE_REAR_PRESSURE|TYRE_FRONT_TEMP|TYRE_REAR_TEMP;
     public static final int MIN_SHOW_SECONDS=1,MAX_SHOW_SECONDS=30,DEFAULT_SHOW_SECONDS=5;
     /** Slider limits: speed km/h, power W in 10 W steps, voltage V, volume %, pressure in 0.1 bar, temperature in degrees. */
@@ -21,7 +21,9 @@ public record WidgetCondition(int mode,int triggers,int showSeconds,int checks,i
     public static final int MIN_PRESSURE=12,MAX_PRESSURE=35,PRESSURE_SCALE=10,MIN_TEMP=-20,MAX_TEMP=100;
     public static final WidgetCondition ALWAYS_SHOWN=new WidgetCondition(ALWAYS,0,DEFAULT_SHOW_SECONDS,0,MIN_SPEED,MAX_SPEED,MIN_POWER,MAX_POWER,MIN_VOLTAGE,MAX_VOLTAGE,MIN_VOLUME,MAX_VOLUME);
     /** Current readings for a WHILE evaluation; NaN marks a missing or expired value. Pressures in bar, temperatures in degrees. */
-    public record Measurements(float speedKmh,float power,float volts,float volumePercent,boolean playing,float frontPressure,float rearPressure,float frontTemp,float rearTemp){}
+    public record Measurements(float speedKmh,float power,float volts,float volumePercent,boolean playing,float frontPressure,float rearPressure,float frontTemp,float rearTemp,boolean bmsConnected){
+        public Measurements(float speedKmh,float power,float volts,float volumePercent,boolean playing,float frontPressure,float rearPressure,float frontTemp,float rearTemp){this(speedKmh,power,volts,volumePercent,playing,frontPressure,rearPressure,frontTemp,rearTemp,false);}
+    }
     public WidgetCondition{
         mode=clamp(mode,ALWAYS,WHILE);triggers&=ALL_TRIGGERS;checks&=ALL_CHECKS;showSeconds=clamp(showSeconds,MIN_SHOW_SECONDS,MAX_SHOW_SECONDS);
         speedMin=clamp(speedMin,MIN_SPEED,MAX_SPEED);speedMax=clamp(speedMax,MIN_SPEED,MAX_SPEED);if(speedMin>speedMax){int t=speedMin;speedMin=speedMax;speedMax=t;}
@@ -53,6 +55,7 @@ public record WidgetCondition(int mode,int triggers,int showSeconds,int checks,i
         if((checks&TYRE_REAR_PRESSURE)!=0&&!within(m.rearPressure(),rearPressureMin,rearPressureMax,MIN_PRESSURE,MAX_PRESSURE,PRESSURE_SCALE))return false;
         if((checks&TYRE_FRONT_TEMP)!=0&&!within(m.frontTemp(),frontTempMin,frontTempMax,MIN_TEMP,MAX_TEMP,1))return false;
         if((checks&TYRE_REAR_TEMP)!=0&&!within(m.rearTemp(),rearTempMin,rearTempMax,MIN_TEMP,MAX_TEMP,1))return false;
+        if((checks&BMS_CONNECTED)!=0&&!m.bmsConnected())return false;
         return (checks&PLAYING)==0||m.playing();
     }
     /** A bound at its slider limit is open; otherwise the scaled value must be inside, and a missing value never matches. */

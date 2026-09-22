@@ -54,6 +54,7 @@ public final class WidgetConditionDialog {
             hold.addView(group);
         }
         CheckBox playing=check(activity,theme,"正在播放",(c.checks()&WidgetCondition.PLAYING)!=0);hold.addView(playing);
+        CheckBox bmsConnected=check(activity,theme,"BMS 已连接",(c.checks()&WidgetCondition.BMS_CONNECTED)!=0);hold.addView(bmsConnected);
         content.addView(hold);
         Runnable refresh=()->{change.setVisibility(modeButtons[1].isChecked()?View.VISIBLE:View.GONE);hold.setVisibility(modeButtons[2].isChecked()?View.VISIBLE:View.GONE);};
         modes.setOnCheckedChangeListener((g,id)->refresh.run());refresh.run();
@@ -63,7 +64,7 @@ public final class WidgetConditionDialog {
                 .setPositiveButton("保存",(d,w)->{
                     int mode=modeButtons[1].isChecked()?WidgetCondition.ON_CHANGE:modeButtons[2].isChecked()?WidgetCondition.WHILE:WidgetCondition.ALWAYS;
                     int triggers=(volumeChange.isChecked()?WidgetCondition.VOLUME_CHANGE:0)|(trackChange.isChecked()?WidgetCondition.TRACK_CHANGE:0)|(playbackChange.isChecked()?WidgetCondition.PLAYBACK_CHANGE:0);
-                    int checks=playing.isChecked()?WidgetCondition.PLAYING:0;int[] v=new int[RANGES.length*2];
+                    int checks=(playing.isChecked()?WidgetCondition.PLAYING:0)|(bmsConnected.isChecked()?WidgetCondition.BMS_CONNECTED:0);int[] v=new int[RANGES.length*2];
                     for(int i=0;i<RANGES.length;i++){if(rangeChecks[i].isChecked())checks|=RANGES[i].check();v[2*i]=bars[i].low()*RANGES[i].step();v[2*i+1]=bars[i].high()*RANGES[i].step();}
                     WidgetCondition next=new WidgetCondition(mode,triggers,seconds.getProgress(),checks,v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7],v[8],v[9],v[10],v[11],v[12],v[13],v[14],v[15]);
                     frames.saveWidgetSettings(frames.widgetSettings().withCondition(widget,next));

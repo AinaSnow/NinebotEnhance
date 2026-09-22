@@ -19,6 +19,9 @@ public final class ServiceBridge {
     private Link current;
     private volatile IBinder remote;
     private volatile String state = "等待连接模块服务";
+    /** The system refused the bind or several binds went unanswered: on HyperOS that is the autostart permission. */
+    private volatile boolean bindRefused;
+    public boolean bindRefused() { return bindRefused; }
     public ServiceBridge(Consumer<String> log) { this.log = log; }
     /** MIUI / HyperOS only let another app start our service once autostart (关联启动) is allowed; say so instead of retrying silently. */
     public static final String AUTOSTART_HINT = "HyperOS / MIUI 需要在“应用管理 → Ninebot Enhance → 自启动”中允许自启动和关联启动，否则九号无法拉起模块服务；授予通知使用权后模块进程由系统保持存活，也可绕过此限制。";
@@ -67,13 +70,14 @@ public final class ServiceBridge {
         Link next = new Link(binding.begin(SystemClock.elapsedRealtime())); current = next; remote = null;
         int failures = binding.failures();
         state = failures == 0 ? "正在绑定模块服务（第 " + next.id + " 次）" : refused("模块服务连续 " + failures + " 次未响应绑定，正在重试"); log.accept("BRIDGE " + state);
+        if (failures >= 2) bindRefused = true;
         try {
             // Acquire a replacement binding before releasing the old one to avoid a needless Service.onDestroy.
             ComponentName target = new ComponentName(Protocol.MODULE, SERVICE_CLASS);
             log.accept("BRIDGE target=" + target.flattenToShortString());
             next.registered = context.bindService(new Intent().setComponent(target),
                     next, Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT);
-            if (!next.registered) { state = refused("系统未接受服务绑定，将自动重试"); log.accept("BRIDGE bindService=false"); }
+            if (!next.registered) { bindRefused = true; state = refused("系统未接受服务绑定，将自动重试"); log.accept("BRIDGE bindService=false"); }
         } catch (RuntimeException e) { state = "服务绑定失败：" + Ipc.error(e); log.accept("BRIDGE " + state); }
         if (previous != null) previous.release();
     }
@@ -91,7 +95,7 @@ public final class ServiceBridge {
                 value.linkToDeath(death, 0); binder = value;
                 if (!value.isBinderAlive()) throw new DeadObjectException();
                 if (!binding.connected(id)) { unlink(); return; }
-                remote = value; state = "模块服务已连接"; log.accept("BRIDGE connected generation=" + id);
+                remote = value; bindRefused = false; state = "模块服务已连接"; log.accept("BRIDGE connected generation=" + id);
             } catch (RemoteException e) {
                 unlink(); remote = null; binding.disconnected(id, SystemClock.elapsedRealtime());
                 state = "连接回调中的 Binder 已失效"; log.accept("BRIDGE " + state);

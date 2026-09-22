@@ -72,6 +72,14 @@ public final class FrameBridgeService extends Service {
                             android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT, lampOptions.toBundle()));
                     break;
                 }
+                case Protocol.BMS_SETTINGS: {
+                    android.app.ActivityOptions bmsOptions = android.app.ActivityOptions.makeBasic();
+                    if (Build.VERSION.SDK_INT >= 35) bmsOptions.setPendingIntentCreatorBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                    Intent bmsIntent = new Intent(FrameBridgeService.this, dev.ichinomiya.ninebotenhance.ui.BmsSettingsActivity.class).putExtra("dark", args.getBoolean("dark", true));
+                    result.putParcelable("bms_intent", android.app.PendingIntent.getActivity(FrameBridgeService.this, 804, bmsIntent,
+                            android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT, bmsOptions.toBundle()));
+                    break;
+                }
                 case Protocol.LAUNCH_APP_PICKER: {
                     android.app.ActivityOptions pickerOptions = android.app.ActivityOptions.makeBasic();
                     if (Build.VERSION.SDK_INT >= 35) pickerOptions.setPendingIntentCreatorBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);

@@ -1,8 +1,8 @@
 package dev.ichinomiya.ninebotenhance.ipc;
 
 public final class Protocol {
-    public static final String VERSION = "1.1.2";
-    public static final int VERSION_CODE = 40;
+    public static final String VERSION = "1.1.3";
+    public static final int VERSION_CODE = 41;
     public static final String DISPLAY_NAME = "Ninebot Enhance Display";
     public static final String DAEMON_CLASS = "dev.ichinomiya.ninebotenhance.display.RootDisplayMain";
     public static final String MODULE = "dev.ichinomiya.ninebotenhance", TARGET = "cn.ninebot.ninebot";
@@ -20,7 +20,7 @@ public final class Protocol {
     /** Navigation apps publish their turn-by-turn state; the Ninebot process polls the latest one. */
     public static final int NAVI_UPDATE = 23, NAVI_SNAPSHOT = 24;
     /** Opens the module's own lamp screen, where its Bluetooth permissions are requested. */
-    public static final int LAMP_SETTINGS = 25;
+    public static final int LAMP_SETTINGS = 25, BMS_SETTINGS = 26;
     public static final String SCREEN_CAPTURE = "screen_capture", CAPTURE_WIDTH = "capture_width", CAPTURE_HEIGHT = "capture_height";
     public static final String CAPTURE_REVISION = "capture_revision", CAPTURE_CONSENT = "capture_consent";
     public static final int ROOT_STOP = 30, ROOT_INPUT = 32, ROOT_KEY = 33, ROOT_RESTART_APP = 34;

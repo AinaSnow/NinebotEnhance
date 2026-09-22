@@ -22,10 +22,11 @@ public final class SidebarLayout {
     /** Half-screen notifications cannot be wider than the column they share with the cards. */
     public static int notificationWidth(int width,boolean halfScreen){return halfScreen?Math.min(width,(int)WIDTH):width;}
     public static Sizes fullWidth(){return new Sizes(WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH);}
+    public static Sizes fullWidth(float bmsHeight){return new Sizes(WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,WIDTH,bmsHeight);}
     /** Second column just left of the first, for cards the dashboard's top-right instrument would otherwise hide. */
     public static final float LEFT_COLUMN_RIGHT=LEFT-2.5f*GAP,LEFT_COLUMN_LEFT=LEFT_COLUMN_RIGHT-WIDTH;
     /** The music card matches the chart cards in height. */
-    public static final float PHONE_HEIGHT=28,MUSIC_HEIGHT=84,TYRE_HEIGHT=28,VOLTAGE_HEIGHT=28,VOLTAGE_CHART_HEIGHT=84,LAMP_HEIGHT=28;
+    public static final float PHONE_HEIGHT=28,MUSIC_HEIGHT=84,TYRE_HEIGHT=28,VOLTAGE_HEIGHT=28,VOLTAGE_CHART_HEIGHT=84,LAMP_HEIGHT=28,BMS_ROW_HEIGHT=28;
     public static final float NOTIFICATION_HEIGHT=60;
     public record Box(float left,float top,float right,float bottom){
         public float height(){return bottom-top;}
@@ -37,18 +38,20 @@ public final class SidebarLayout {
      * Cards of both columns (null when switched off or hidden) plus where the notification block sits: its bottom edge, and whether
      * the hill-hold dodge moved it left of the toast.
      */
-    public record Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power,Box lamp,float notificationBottom,boolean notificationDodged){
-        public Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power){this(phone,music,voltage,tyres,speed,power,null,BOTTOM,false);}
-        public Stack shifted(float dy){return dy==0?this:new Stack(shift(phone,dy),shift(music,dy),shift(voltage,dy),shift(tyres,dy),shift(speed,dy),shift(power,dy),shift(lamp,dy),notificationBottom,notificationDodged);}
+    public record Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power,Box lamp,Box bms,float notificationBottom,boolean notificationDodged){
+        public Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power){this(phone,music,voltage,tyres,speed,power,null,null,BOTTOM,false);}
+        public Stack(Box phone,Box music,Box voltage,Box tyres,Box speed,Box power,Box lamp,float notificationBottom,boolean notificationDodged){this(phone,music,voltage,tyres,speed,power,lamp,null,notificationBottom,notificationDodged);}
+        public Stack shifted(float dy){return dy==0?this:new Stack(shift(phone,dy),shift(music,dy),shift(voltage,dy),shift(tyres,dy),shift(speed,dy),shift(power,dy),shift(lamp,dy),shift(bms,dy),notificationBottom,notificationDodged);}
         private static Box shift(Box box,float dy){return box==null?null:box.shifted(dy);}
         /** Box of the card for a widget flag; null when absent. */
         public Box of(int widget){
-            return switch(widget){case WidgetSettings.PHONE->phone;case WidgetSettings.MUSIC->music;case WidgetSettings.TYRES->tyres;case WidgetSettings.VOLTAGE->voltage;case WidgetSettings.SPEED->speed;case WidgetSettings.POWER->power;case WidgetSettings.LAMP->lamp;default->null;};
+            return switch(widget){case WidgetSettings.PHONE->phone;case WidgetSettings.MUSIC->music;case WidgetSettings.TYRES->tyres;case WidgetSettings.VOLTAGE->voltage;case WidgetSettings.SPEED->speed;case WidgetSettings.POWER->power;case WidgetSettings.LAMP->lamp;case WidgetSettings.BMS->bms;default->null;};
         }
     }
     /** Content widths measured by the renderer; music and tyres are fixed to the sidebar width, the metric cards use template widths without their charts. */
-    public record Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth,float lampWidth){
+    public record Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth,float lampWidth,float bmsWidth,float bmsHeight){
         public Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth){this(phoneWidth,musicWidth,voltageWidth,tyreWidth,WIDTH,WIDTH,WIDTH);}
+        public Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth,float lampWidth){this(phoneWidth,musicWidth,voltageWidth,tyreWidth,speedWidth,powerWidth,lampWidth,WIDTH,BMS_ROW_HEIGHT);}
         public Sizes(float phoneWidth,float musicWidth,float voltageWidth,float tyreWidth,float speedWidth,float powerWidth){this(phoneWidth,musicWidth,voltageWidth,tyreWidth,speedWidth,powerWidth,WIDTH);}
     }
     /** Vertical volume bar above the dashboard speaker icon at the lower left; outside the columns and display only. */
@@ -99,7 +102,7 @@ public final class SidebarLayout {
         for(int w:right){
             if(w==WidgetSettings.NOTIFICATIONS){notificationBottom=bottom;bottom-=lift;continue;}
             if((visible&w)==0)continue;
-            Box card=box(bottom,height(settings,w),width(sizes,w),WIDTH,RIGHT);placed.put(w,card);bottom=card.top()-GAP;
+            Box card=box(bottom,height(settings,sizes,w),width(sizes,w),WIDTH,RIGHT);placed.put(w,card);bottom=card.top()-GAP;
         }
         boolean dodged=false;
         if(dodge){
@@ -115,27 +118,27 @@ public final class SidebarLayout {
         }
         if(lift>0)leftBottom=Math.min(leftBottom,notificationBottom-lift);
         ArrayList<Integer> leftCards=new ArrayList<>();ArrayList<Box> reference=new ArrayList<>();float probe=leftBottom;
-        for(int w:left){if((visible&w)==0)continue;Box card=box(probe,height(settings,w),width(sizes,w),WIDTH,LEFT_COLUMN_RIGHT);leftCards.add(w);reference.add(card);probe=card.top()-GAP;}
+        for(int w:left){if((visible&w)==0)continue;Box card=box(probe,height(settings,sizes,w),width(sizes,w),WIDTH,LEFT_COLUMN_RIGHT);leftCards.add(w);reference.add(card);probe=card.top()-GAP;}
         // Overflow: a right-column card under the instrument is inserted above every left card that sits lower than it did.
         for(int w:right){
             Box card=placed.get(w);if(card==null||card.right()!=RIGHT||!intersectsAny(card,occlusions))continue;
             float center=(card.top()+card.bottom())/2;int index=0;for(Box other:reference)if((other.top()+other.bottom())/2>center)index++;
             leftCards.add(index,w);reference.add(index,card);placed.remove(w);
         }
-        for(int w:leftCards){Box card=box(leftBottom,height(settings,w),width(sizes,w),WIDTH,LEFT_COLUMN_RIGHT);placed.put(w,card);leftBottom=card.top()-GAP;}
-        return new Stack(placed.get(WidgetSettings.PHONE),placed.get(WidgetSettings.MUSIC),placed.get(WidgetSettings.VOLTAGE),placed.get(WidgetSettings.TYRES),placed.get(WidgetSettings.SPEED),placed.get(WidgetSettings.POWER),placed.get(WidgetSettings.LAMP),notificationBottom,dodged);
+        for(int w:leftCards){Box card=box(leftBottom,height(settings,sizes,w),width(sizes,w),WIDTH,LEFT_COLUMN_RIGHT);placed.put(w,card);leftBottom=card.top()-GAP;}
+        return new Stack(placed.get(WidgetSettings.PHONE),placed.get(WidgetSettings.MUSIC),placed.get(WidgetSettings.VOLTAGE),placed.get(WidgetSettings.TYRES),placed.get(WidgetSettings.SPEED),placed.get(WidgetSettings.POWER),placed.get(WidgetSettings.LAMP),placed.get(WidgetSettings.BMS),notificationBottom,dodged);
     }
-    private static float height(WidgetSettings s,int widget){
+    private static float height(WidgetSettings s,Sizes z,int widget){
         return switch(widget){
             case WidgetSettings.PHONE->PHONE_HEIGHT;case WidgetSettings.MUSIC->MUSIC_HEIGHT;case WidgetSettings.TYRES->TYRE_HEIGHT;
             case WidgetSettings.VOLTAGE->metricHeight(s.enabled(WidgetSettings.VOLTAGE_CHART));case WidgetSettings.SPEED->metricHeight(s.enabled(WidgetSettings.SPEED_CHART));
-            case WidgetSettings.POWER->metricHeight(s.enabled(WidgetSettings.POWER_CHART));case WidgetSettings.LAMP->LAMP_HEIGHT;default->0;
+            case WidgetSettings.POWER->metricHeight(s.enabled(WidgetSettings.POWER_CHART));case WidgetSettings.LAMP->LAMP_HEIGHT;case WidgetSettings.BMS->z.bmsHeight();default->0;
         };
     }
     private static float width(Sizes z,int widget){
         return switch(widget){
             case WidgetSettings.PHONE->z.phoneWidth();case WidgetSettings.MUSIC->z.musicWidth();case WidgetSettings.TYRES->z.tyreWidth();
-            case WidgetSettings.VOLTAGE->z.voltageWidth();case WidgetSettings.SPEED->z.speedWidth();case WidgetSettings.POWER->z.powerWidth();case WidgetSettings.LAMP->z.lampWidth();default->WIDTH;
+            case WidgetSettings.VOLTAGE->z.voltageWidth();case WidgetSettings.SPEED->z.speedWidth();case WidgetSettings.POWER->z.powerWidth();case WidgetSettings.LAMP->z.lampWidth();case WidgetSettings.BMS->z.bmsWidth();default->WIDTH;
         };
     }
     /** Strict overlap: boxes that only share an edge do not intersect. */

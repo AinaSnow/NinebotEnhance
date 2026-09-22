@@ -56,11 +56,11 @@ public final class WidgetSettingsDialog {
     static String label(int flag){
         return switch(flag){
             case WidgetSettings.PHONE->"手机状态";case WidgetSettings.MUSIC->"音乐";case WidgetSettings.TYRES->"胎压";case WidgetSettings.VOLTAGE->"电压";case WidgetSettings.SPEED->"速度";
-            case WidgetSettings.POWER->"功率";case WidgetSettings.NOTIFICATIONS->"通知";case WidgetSettings.VOLUME->"音量";case WidgetSettings.HILL_HOLD_DODGE->"驻车避让";case WidgetSettings.LAMP->"大灯";default->"";
+            case WidgetSettings.POWER->"功率";case WidgetSettings.NOTIFICATIONS->"通知";case WidgetSettings.VOLUME->"音量";case WidgetSettings.HILL_HOLD_DODGE->"驻车避让";case WidgetSettings.LAMP->"大灯";case WidgetSettings.BMS->"BMS";default->"";
         };
     }
     private static LinearLayout.LayoutParams rowParams(Activity activity){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.bottomMargin=MirrorUi.dp(activity,4);return p;}
-    private static TextView handle(Activity activity,MirrorUi theme){
+    static TextView handle(Activity activity,MirrorUi theme){
         TextView handle=new TextView(activity);handle.setText("≡");handle.setTextSize(22);handle.setTextColor(theme.secondary);handle.setGravity(Gravity.CENTER);return handle;
     }
     /** The line between the columns: rows above it are the left column, rows below the right one. */
@@ -87,10 +87,12 @@ public final class WidgetSettingsDialog {
             case WidgetSettings.POWER->()->WidgetOptionsDialog.power(activity,frames,reference);
             case WidgetSettings.NOTIFICATIONS->()->frames.notificationSettings(activity,theme.dark);
             case WidgetSettings.HILL_HOLD_DODGE->()->WidgetOptionsDialog.hold(activity,frames,reference);
-            case WidgetSettings.LAMP->()->frames.lampSettings(activity,theme.dark);
+            case WidgetSettings.BMS->()->BmsCardDialog.show(activity,frames,reference);
             default->null;
         };
         if(open!=null)row.addView(small(activity,theme,"设置",v->open.run()),smallParams(activity));
+        if(flag==WidgetSettings.LAMP)row.addView(small(activity,theme,"管理",v->frames.lampSettings(activity,theme.dark)),smallParams(activity));
+        if(flag==WidgetSettings.BMS)row.addView(small(activity,theme,"管理",v->frames.bmsSettings(activity,theme.dark)),smallParams(activity));
         return row;
     }
     private static Button small(Activity activity,MirrorUi theme,String text,View.OnClickListener click){
@@ -103,7 +105,7 @@ public final class WidgetSettingsDialog {
      * The dragged row follows the finger, the others slide aside, and the drop position becomes its new index; the scroll view stays
      * still meanwhile. Notifications live in the right column only: their row cannot rise above the divider and the divider cannot sink below them.
      */
-    private static final class DragHandle implements View.OnTouchListener{
+    static final class DragHandle implements View.OnTouchListener{
         private final View row;private final LinearLayout list;private final ScrollView scroll;
         private float startY;private int from,target,lowest,highest,margin;private int[] tops,heights;
         DragHandle(View row,LinearLayout list,ScrollView scroll){this.row=row;this.list=list;this.scroll=scroll;}

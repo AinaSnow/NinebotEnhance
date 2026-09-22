@@ -61,7 +61,7 @@ final class LampTests {
 
         CoreTests.check(WidgetSettings.CARDS.contains(WidgetSettings.LAMP)&&WidgetSettings.DEFAULT_ORDER.contains(WidgetSettings.LAMP)
                 &&(WidgetSettings.OFF_BY_DEFAULT&WidgetSettings.LAMP)!=0&&!WidgetSettings.DEFAULT.enabled(WidgetSettings.LAMP),"the lamp card exists and is off until it is set up");
-        CoreTests.check(WidgetSettings.index(WidgetSettings.LAMP)>=0&&WidgetSettings.CONDITIONAL.length==9,"the lamp card takes a display condition like the others");
+        CoreTests.check(WidgetSettings.index(WidgetSettings.LAMP)>=0&&WidgetSettings.CONDITIONAL.length==10,"the lamp card takes a display condition like the others");
         WidgetSettings older=WidgetSettings.migrate(5,WidgetSettings.ALL,30,1000,5,30);
         CoreTests.check(!older.enabled(WidgetSettings.LAMP)&&WidgetSettings.migrate(6,WidgetSettings.ALL,30,1000,5,30).enabled(WidgetSettings.LAMP),"saves from before the lamp existed do not inherit it");
         CoreTests.check(WidgetSettings.normalizeOrder(List.of(WidgetSettings.PHONE)).contains(WidgetSettings.LAMP),"an order saved without the lamp gains it");

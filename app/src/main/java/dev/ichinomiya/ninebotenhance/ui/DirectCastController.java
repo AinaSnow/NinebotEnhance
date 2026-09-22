@@ -68,6 +68,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
         if (permissionCheck.active()) { cancelPermissionCheck(); return; }
         if (session.phase() != DirectSession.Phase.IDLE) { end(session.request(), true, "投屏已停止"); return; }
         if (!usable(activity) || card == null || !card.isAttachedToWindow()) return;
+        autostartPrompt(activity);
         checkPermission(activity, card, () -> startVehicle(activity, card));
     }
     private void startVehicle(Activity activity, View card) {
@@ -365,6 +366,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
         if (!usable(activity)) return;
         if (!frames.noticeAccepted()) { OpenSourceNoticeDialog.show(activity, card, frames, () -> settings(activity, card)); return; }
         if (permissionCheck.active()) cancelPermissionCheck();
+        autostartPrompt(activity);
         DisplaySettings cached = frames.cachedSettings();
         MirrorUi theme = new MirrorUi(activity, card);
         LinearLayout layout = new LinearLayout(activity); layout.setOrientation(LinearLayout.VERTICAL);
@@ -391,19 +393,17 @@ public final class DirectCastController implements Application.ActivityLifecycle
         LinearLayout tools = new LinearLayout(activity);
         LinearLayout.LayoutParams toolsParams = new LinearLayout.LayoutParams(-1, -2); toolsParams.topMargin = MirrorUi.dp(activity, 12);
         Button widgets=new Button(activity);widgets.setText("控件管理");
-        Button encoder=new Button(activity);encoder.setText("编码覆盖");
+        Button encoder=new Button(activity);encoder.setText("设置覆盖");
         Button hidden=new Button(activity);hidden.setText("隐藏功能");
-        Button lamp=new Button(activity);lamp.setText("大灯控制");
-        for (Button tool : new Button[]{widgets, encoder, hidden, lamp}) {
+        for (Button tool : new Button[]{widgets, encoder, hidden}) {
             theme.button(tool, null); tool.setTextSize(13); tool.setMaxLines(1); tool.setPadding(MirrorUi.dp(activity, 4), tool.getPaddingTop(), MirrorUi.dp(activity, 4), tool.getPaddingBottom());
             LinearLayout.LayoutParams toolParams = new LinearLayout.LayoutParams(0, -2, 1); if (tools.getChildCount() > 0) toolParams.setMarginStart(MirrorUi.dp(activity, 8));
             tools.addView(tool, toolParams);
         }
         layout.addView(tools, toolsParams);
         widgets.setOnClickListener(v->WidgetSettingsDialog.show(activity,frames,card));
-        encoder.setOnClickListener(v->EncoderOverrideDialog.show(activity,frames,card));
+        encoder.setOnClickListener(v->EncoderOverrideDialog.show(activity,frames,card,session.phase()==DirectSession.Phase.IDLE));
         hidden.setOnClickListener(v->HiddenFeatureDialog.show(activity,frames,card));
-        lamp.setOnClickListener(v->frames.lampSettings(activity,theme.dark));
         TextView appLabel = new TextView(activity); appLabel.setText("启动应用"); appLabel.setTextColor(theme.secondary); appLabel.setPadding(0, pad / 2, 0, pad / 3); layout.addView(appLabel);
         ChoiceSpinner appPicker = new ChoiceSpinner(activity, theme, "选择启动应用");
         ArrayList<Bundle> apps = new ArrayList<>();
@@ -418,7 +418,8 @@ public final class DirectCastController implements Application.ActivityLifecycle
                 virtualHeight=field(activity,fieldColumn(activity,virtualDimensions),"虚拟屏高度",cached.virtualHeight,theme),
                 dpi=field(activity,dpiColumn,"DPI",cached.dpi,theme);
         // The frame follows the vehicle's cast configuration; the fields stay for the read-back text but are never shown.
-        dimensions.setVisibility(View.GONE);
+        // Virtual size, density, colours and the DPI switches moved to the override dialog; the fields stay for the read-back only.
+        dimensions.setVisibility(View.GONE);virtualDimensions.setVisibility(View.GONE);options.setVisibility(View.GONE);
         LinearLayout colorColumn = fieldColumn(activity, options);
         fieldLabel(activity, colorColumn, "深色背景", theme);
         BandColorButton topColor = new BandColorButton(activity, theme, cached.backgroundColor);
@@ -435,7 +436,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
         compat.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);compat.setIncludeFontPadding(false);compat.setPadding(0,MirrorUi.dp(activity,8),0,MirrorUi.dp(activity,8));
         LinearLayout dpiRow=new LinearLayout(activity);dpiRow.setGravity(Gravity.CENTER_VERTICAL);
         dpiRow.addView(keepDpi,new LinearLayout.LayoutParams(0,-2,1));dpiRow.addView(compat,new LinearLayout.LayoutParams(0,-2,1));
-        layout.addView(dpiRow,new LinearLayout.LayoutParams(-1,-2));
+        layout.addView(dpiRow,new LinearLayout.LayoutParams(-1,-2));dpiRow.setVisibility(View.GONE);
         // Compat scaling only makes sense with keep-DPI; once the daemon reported a forced-size failure it stays on.
         Runnable compatSync=()->{boolean forced=frames.compatScaleForced();if(forced)compat.setChecked(true);compat.setEnabled(keepDpi.isEnabled()&&keepDpi.isChecked()&&!forced);};
         keepDpi.setOnCheckedChangeListener((b,c)->compatSync.run());compatSync.run();
@@ -464,10 +465,10 @@ public final class DirectCastController implements Application.ActivityLifecycle
         footer.about.setOnClickListener(v -> AboutDialog.show(activity, card, frames));
         footer.close.setOnClickListener(v -> dialog.dismiss());
         Button save = footer.save; save.setEnabled(false);
-        boolean[] loaded = {false};
+        boolean[] loaded = {false};DisplaySettings[] loadedValue={null};
         Runnable showMode = () -> {
             boolean virtual = frames.cachedPrivilege().usesVirtualDisplay();
-            for (View field : new View[]{appLabel,appPicker,virtualDimensions,options,dpiRow,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
+            for (View field : new View[]{appLabel,appPicker,local,localHelp})field.setVisibility(virtual?View.VISIBLE:View.GONE);
             retryParams.setMarginEnd(virtual ? MirrorUi.dp(activity, 12) : 0); retry.setLayoutParams(retryParams);
         };
         showMode.run();
@@ -478,7 +479,7 @@ public final class DirectCastController implements Application.ActivityLifecycle
             connection.setText("正在读取已保存参数；当前显示缓存或未保存的输入。");
             frames.getSettings(config -> {
                 if (!usable(activity) || !dialog.isShowing()) return;
-                DisplaySettings value = Ipc.settings(config);
+                DisplaySettings value = Ipc.settings(config);loadedValue[0]=value;
                 boolean edited = !w.equals(width.getText().toString()) || !h.equals(height.getText().toString()) || !d.equals(dpi.getText().toString())
                         ||!vw.equals(virtualWidth.getText().toString())||!vh.equals(virtualHeight.getText().toString())||color!=topColor.color()||light!=lightColor.color()||keep!=keepDpi.isChecked();
                 if (!edited) { width.setText(String.valueOf(value.width)); height.setText(String.valueOf(value.height)); dpi.setText(String.valueOf(value.dpi));
@@ -536,9 +537,8 @@ public final class DirectCastController implements Application.ActivityLifecycle
             if (index <= 0 || index >= apps.size()) { toast(activity, "请先选择启动应用"); return; }
             String selected = apps.get(index).getString("component");
             try {
-                DisplaySettings next = new DisplaySettings(frames.frameWidth(),
-                        frames.frameHeight(),Integer.parseInt(virtualWidth.getText().toString().trim()),
-                        Integer.parseInt(virtualHeight.getText().toString().trim()),Integer.parseInt(dpi.getText().toString().trim()),topColor.color(),keepDpi.isChecked(),lightColor.color(),compat.isChecked()&&keepDpi.isChecked());
+                // Display parameters are edited in the override dialog; this save keeps the stored ones inside the current frame.
+                DisplaySettings next = (loadedValue[0] == null ? cached : loadedValue[0]).withFrame(frames.frameWidth(), frames.frameHeight());
                 save.setEnabled(false); retry.setEnabled(false); local.setEnabled(false); appPicker.setEnabled(false);
                 width.setEnabled(false);height.setEnabled(false);dpi.setEnabled(false);virtualWidth.setEnabled(false);virtualHeight.setEnabled(false);topColor.setEnabled(false);lightColor.setEnabled(false);keepDpi.setEnabled(false);compatSync.run();connection.setText("正在保存…");
                 frames.saveSettings(next, selected, error -> {
@@ -587,6 +587,14 @@ public final class DirectCastController implements Application.ActivityLifecycle
         text.setPadding(0, pad, 0, pad / 2); layout.addView(text);
     }
     /** MIUI per-app permission editor first, then the autostart manager, then the plain app details page. */
+    private static boolean autostartPrompted;
+    /** Once per process: the system refused to bind the module service, which on HyperOS means autostart is off. */
+    private void autostartPrompt(Activity activity) {
+        if (autostartPrompted || frames.serviceConnected() || !frames.serviceBindRefused() || !usable(activity)) return;
+        autostartPrompted = true;
+        new AlertDialog.Builder(activity).setTitle("自启动权限").setMessage(ServiceBridge.AUTOSTART_HINT)
+                .setPositiveButton("打开设置", (d, w) -> openAutostart(activity)).setNegativeButton("关闭", null).show();
+    }
     private void openAutostart(Activity activity) {
         Intent[] candidates = {
             new Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity").putExtra("extra_pkgname", Protocol.MODULE),

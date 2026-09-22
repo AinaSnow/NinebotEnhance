@@ -64,7 +64,10 @@ final class DashboardLayoutTests {
         DashboardLayout portrait=DashboardLayout.parse(M5P.replace("\"dimensionWidth\": 848.0","\"dimensionWidth\": 240.0").replace("\"dimensionHeight\": 480.0","\"dimensionHeight\": 320.0")
                 .replace("\"codecWidth\": 848.0","\"codecWidth\": 240.0").replace("\"codecHeight\": 480.0","\"codecHeight\": 320.0"));
         check(portrait.frameWidth()==240&&portrait.frameHeight()==320,"a 240 x 320 half-screen configuration is read instead of rejected");
-        DisplaySettings small=new DisplaySettings(848,480,600,480,180,0xff242424,true).withFrame(240,320);
+        DisplaySettings small=new DisplaySettings(848,480,600,480,180,0xff242424,true,0xffe6eaee,false,true).withFrame(240,320);
+        DisplaySettings shapeDefault=new DisplaySettings(848,480,600,480,180,0xff242424,true,0xffe6eaee,false,false);
+        check(shapeDefault.withFrame(240,320).virtualWidth==240&&shapeDefault.withFrame(240,320).virtualHeight==300&&shapeDefault.withFrame(240,320).dpi==160&&shapeDefault.withFrame(848,480).virtualWidth==640&&shapeDefault.withFrame(848,480).virtualHeight==440&&shapeDefault.withFrame(848,480).dpi==160&&!shapeDefault.withFrame(848,480).virtualOverride,"without the override the virtual display takes the shape defaults");
+        check(DisplaySettings.read((k,f)->k.equals("virtual_override")?1:k.equals("layout_version")?2:f).virtualOverride&&!DisplaySettings.defaults().virtualOverride,"the override flag round-trips");
         check(small.width==240&&small.height==320&&small.virtualWidth==240&&small.virtualHeight==300&&small.dpi==180,"the virtual display shrinks into a portrait frame keeping the density and the top strip");
         check(SidebarLayout.fits(848,480)&&SidebarLayout.fits(636,360)&&SidebarLayout.fits(340,192)&&!SidebarLayout.fits(200,100)&&!SidebarLayout.fits(0,320),"landscape cards are drawn down to 40% of the reference fit and hidden below");
         SidebarLayout.Fit portraitFit=SidebarLayout.fit(240,320),wide=SidebarLayout.fit(848,480);

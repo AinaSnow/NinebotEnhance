@@ -97,7 +97,7 @@ public final class RootSession {
             context.getSharedPreferences("virtual_display", 0).edit().putInt("width", value.width)
                     .putInt("height",value.height).putInt("dpi",value.dpi)
                     .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
-                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("compat_scale",value.compatScale?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
+                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("compat_scale",value.compatScale?1:0).putInt("virtual_override",value.virtualOverride?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, app.flattenToString()).apply();
         }
     }

@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import dev.ichinomiya.ninebotenhance.diagnostics.StreamStats;
 import dev.ichinomiya.ninebotenhance.diagnostics.StreamOverlay;
 import dev.ichinomiya.ninebotenhance.core.EncoderOverride;
+import dev.ichinomiya.ninebotenhance.core.BmsCard;
 import dev.ichinomiya.ninebotenhance.core.DashboardLayout;
 import dev.ichinomiya.ninebotenhance.core.HiddenFeatures;
 import dev.ichinomiya.ninebotenhance.diagnostics.EncodingDiagnostics;
@@ -157,6 +158,7 @@ public final class FrameClient {
                 hiddenFeatures=new HiddenFeatures(saved.getBoolean("unhide_throttle",false),saved.getBoolean("unhide_hardkey",false),saved.getBoolean("unhide_cruise",false));
                 naviTest=false;
                 naviLive=saved.getBoolean("navi_live",true);
+                bmsLayout=BmsCard.parse(saved.getString("bms_layout",""));hud.setBmsLayout(bmsLayout);
                 dashboardDark=saved.getBoolean("dashboard_dark",true);hud.setDark(dashboardDark);
                 java.util.Set<String> chosen=saved.getStringSet("probe_registers",null); if(chosen!=null) probeSelection=new java.util.LinkedHashSet<>(chosen);
                 java.util.Set<String> raw=saved.getStringSet("probe_raw_modules",null); if(raw!=null) probeRawModules=new java.util.LinkedHashSet<>(raw);
@@ -198,6 +200,14 @@ public final class FrameClient {
     public void setVehicleReader(java.util.function.BiConsumer<String, WidgetSettings> pulse, Runnable stop, java.util.function.Supplier<String> summary) { vehiclePulse = pulse; vehicleStop = stop; vehicleReadSummary = summary; }
     public void setNaviTest(java.util.function.Consumer<String> pulse, Runnable stop) { naviTestPulse = pulse; naviTestStop = stop; }
     public boolean naviTest(){return naviTest;}
+    /** The BMS card layout lives with the other host-side widget settings. */
+    private volatile BmsCard.Layout bmsLayout=BmsCard.DEFAULT;
+    public BmsCard.Layout bmsLayout(){return bmsLayout;}
+    public void saveBmsLayout(BmsCard.Layout value){
+        bmsLayout=value;hud.setBmsLayout(value);
+        if(context!=null)context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).edit().putString("bms_layout",value.encode()).apply();
+        report("BMS layout "+value.encode());View preview=inlinePreview.get();if(preview!=null)preview.postInvalidateOnAnimation();
+    }
     public void setNaviLive(java.util.function.BiConsumer<String, NaviUpdate> pulse) { naviLivePulse = pulse; }
     /** Installed by the hook layer: (vehicle, dark) once per pulse during a vehicle session, null dark when the session ends. */
     public void setThemeSender(java.util.function.BiConsumer<String, Boolean> sender) { themeSender = sender; }
@@ -725,6 +735,20 @@ public final class FrameClient {
             } catch (Exception e) { android.widget.Toast.makeText(activity, "无法打开大灯控制：" + Ipc.error(e), 1).show(); }
         }, error -> { if (!activity.isDestroyed()) android.widget.Toast.makeText(activity, error, 1).show(); });
     }
+    /** Opens the module's own BMS screen; its Bluetooth permissions belong to the module, not to Ninebot. */
+    public void bmsSettings(Activity activity,boolean dark){
+        Bundle args=new Bundle();args.putBoolean("dark",dark);
+        metadataCall(Protocol.BMS_SETTINGS,args,result->{
+            if(activity.isFinishing()||activity.isDestroyed())return;
+            try{
+                PendingIntent intent=result.getParcelable("bms_intent",PendingIntent.class);
+                if(intent==null)throw new IllegalStateException("模块版本不匹配，请更新并重启九号出行");
+                ActivityOptions options=ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(Build.VERSION.SDK_INT>=36
+                        ?ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE:ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                activity.startIntentSenderForResult(intent.getIntentSender(),-1,null,0,0,0,options.toBundle());
+            }catch(Exception e){android.widget.Toast.makeText(activity,"无法打开 BMS 管理："+Ipc.error(e),1).show();}
+        },error->{if(!activity.isDestroyed())android.widget.Toast.makeText(activity,error,1).show();});
+    }
     public void notificationSettings(Activity activity, boolean dark) {
         Bundle args = new Bundle(); args.putBoolean("dark", dark);
         metadataCall(Protocol.NOTIFICATION_SETTINGS, args, result -> {
@@ -793,6 +817,8 @@ public final class FrameClient {
         return calibration;
     }
     public PrivilegeMode cachedPrivilege() { return savedPrivilege; }
+    public String cachedApp() { return savedApp == null ? "" : savedApp; }
+    public boolean serviceBindRefused() { return bridge.bindRefused(); }
     /** Set once the daemon reported that it could not force the display size; keep-DPI then always uses compat scaling. */
     private volatile boolean compatScaleForced;
     private DisplaySettings.RenderPlan compatPlan;
@@ -831,7 +857,7 @@ public final class FrameClient {
             if (context != null) context.getSharedPreferences("dev.ichinomiya.ninebotenhance.cached_display", Context.MODE_PRIVATE).edit()
                     .putInt("width",value.width).putInt("height",value.height).putInt("dpi",value.dpi)
                     .putInt("layout_version",DisplaySettings.LAYOUT_VERSION).putInt("virtual_width",value.virtualWidth).putInt("virtual_height",value.virtualHeight)
-                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("compat_scale",value.compatScale?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
+                    .putInt("background_color",value.backgroundColor).putInt("keep_phone_dpi",value.keepPhoneDpi?1:0).putInt("compat_scale",value.compatScale?1:0).putInt("virtual_override",value.virtualOverride?1:0).putInt("light_background_color",value.lightBackgroundColor).remove("top_inset").remove("top_color")
                     .putString(AppCatalog.SELECTED, selected).apply();
         } catch (RuntimeException e) { report("SETTINGS cache write " + Ipc.error(e)); }
     }

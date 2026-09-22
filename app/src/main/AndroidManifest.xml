@@ -29,6 +29,8 @@
             android:excludeFromRecents="true" />
         <activity android:name=".ui.LampSettingsActivity" android:exported="false"
             android:excludeFromRecents="true" />
+        <activity android:name=".ui.BmsSettingsActivity" android:exported="false"
+            android:excludeFromRecents="true" />
         <service android:name=".notification.MirrorNotificationListener" android:exported="true"
             android:label="Ninebot Enhance" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>

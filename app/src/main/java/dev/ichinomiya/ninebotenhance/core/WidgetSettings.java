@@ -8,27 +8,27 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
                              List<Integer> order,Map<Integer,WidgetCondition> conditions) {
     public static final int PHONE=1,TYRES=2,MUSIC=4,NOTIFICATIONS=16,TYRE_FRONT=32,TYRE_REAR=64,VOLTAGE=128,TYRE_READ=256,
             VOLTAGE_READ=512,VOLTAGE_CHART=1024,MUSIC_AUTO_HIDE=2048,VOLUME=4096,REGISTER_PROBE=8192,HILL_HOLD_DODGE=16384,
-            SPEED=32768,POWER=65536,SPEED_CHART=131072,POWER_CHART=262144,LAMP=524288;
+            SPEED=32768,POWER=65536,SPEED_CHART=131072,POWER_CHART=262144,LAMP=524288,BMS=1048576,VOLTAGE_FROM_BMS=2097152,POWER_FROM_BMS=4194304;
     public static final int ALL=PHONE|TYRES|MUSIC|NOTIFICATIONS|TYRE_FRONT|TYRE_REAR|VOLTAGE|TYRE_READ|VOLTAGE_READ|VOLTAGE_CHART|MUSIC_AUTO_HIDE|VOLUME|REGISTER_PROBE|HILL_HOLD_DODGE
-            |SPEED|POWER|SPEED_CHART|POWER_CHART|LAMP;
+            |SPEED|POWER|SPEED_CHART|POWER_CHART|LAMP|BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS;
     /** Switches introduced by later preference versions; masks saved by older builds get them switched on once. */
     public static final int ADDED_IN_V2=VOLTAGE_READ|VOLTAGE_CHART|MUSIC_AUTO_HIDE|VOLUME,ADDED_IN_V3=HILL_HOLD_DODGE,ADDED_IN_V4=SPEED_CHART|POWER_CHART;
     /**
      * Version 5 changed the hill-hold minimum time semantics (it now gates the release too) and reset its default; older saves
      * take the new default. Version 6 added the lamp card, which older saves must not inherit: without a bound lamp it would
-     * only ever read "未连接".
+     * only ever read "未连接". Version 7 added the BMS card and the two BMS-first source switches, likewise not inherited.
      */
-    public static final int PREFERENCE_VERSION=6;
+    public static final int PREFERENCE_VERSION=7;
     /** Switches that are off in a fresh install: the diagnostic probe, the two optional ride cards and the lamp. */
-    public static final int OFF_BY_DEFAULT=REGISTER_PROBE|SPEED|POWER|LAMP;
+    public static final int OFF_BY_DEFAULT=REGISTER_PROBE|SPEED|POWER|LAMP|BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS;
     /** Marker inside the order: entries before it form the right column (bottom up), entries after it the left column (bottom up). */
     public static final int COLUMN_DIVIDER=0;
     /** Cards of the two columns; the notification block is one of them and always belongs to the right column. */
-    public static final List<Integer> CARDS=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP);
+    public static final List<Integer> CARDS=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP,BMS);
     /** Default: everything in the right column, bottom up, and an empty left column. */
-    public static final List<Integer> DEFAULT_ORDER=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP,COLUMN_DIVIDER);
+    public static final List<Integer> DEFAULT_ORDER=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP,BMS,COLUMN_DIVIDER);
     /** Widgets that accept a display condition, in the index order the renderer uses for its timers. */
-    public static final int[] CONDITIONAL={PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,NOTIFICATIONS,VOLUME,LAMP};
+    public static final int[] CONDITIONAL={PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,NOTIFICATIONS,VOLUME,LAMP,BMS};
     public static final int MIN_TYRE_SECONDS=5,MAX_TYRE_SECONDS=60,DEFAULT_TYRE_SECONDS=30;
     /** Voltage, speed and power are read at sub-second intervals; sliders move in READ_STEP_MS steps. */
     public static final int MIN_READ_MS=500,MAX_READ_MS=15000,DEFAULT_READ_MS=1000,READ_STEP_MS=500;
@@ -92,6 +92,7 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
         int upgraded=mask;if(version<2)upgraded|=ADDED_IN_V2;if(version<3)upgraded|=ADDED_IN_V3;if(version<4)upgraded|=ADDED_IN_V4;
         if(version<5)holdSeconds=DEFAULT_HOLD_SECONDS;
         if(version<6)upgraded&=~LAMP;
+        if(version<7)upgraded&=~(BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS);
         return new WidgetSettings(upgraded,tyreSeconds,voltageMs,musicHideSeconds,chartSeconds,holdPowerMin,holdSpeedMax,speedMs,powerMs,holdPowerMax,holdSeconds,speedChartSeconds,powerChartSeconds,order,conditions);
     }
     public boolean enabled(int widget){return (mask&widget)!=0;}

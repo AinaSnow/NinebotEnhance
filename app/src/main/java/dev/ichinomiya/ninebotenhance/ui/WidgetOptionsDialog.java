@@ -26,7 +26,7 @@ public final class WidgetOptionsDialog {
     }
     public static void voltage(Activity activity,FrameClient frames,View reference){
         WidgetSettings s=frames.widgetSettings();
-        show(activity,frames,reference,"电压",List.of(new Option("曲线图",WidgetSettings.VOLTAGE_CHART)),
+        show(activity,frames,reference,"电压",List.of(new Option("曲线图",WidgetSettings.VOLTAGE_CHART),new Option("BMS 优先",WidgetSettings.VOLTAGE_FROM_BMS)),
                 List.of(new Slider("曲线时长",WidgetSettings.MIN_CHART_SECONDS,WidgetSettings.MAX_CHART_SECONDS,s.chartSeconds(),SECONDS)),
                 (current,mask,values)->current.withMask(mask).chart(values[0]));
     }
@@ -38,7 +38,7 @@ public final class WidgetOptionsDialog {
     }
     public static void power(Activity activity,FrameClient frames,View reference){
         WidgetSettings s=frames.widgetSettings();
-        show(activity,frames,reference,"功率",List.of(new Option("曲线图",WidgetSettings.POWER_CHART)),
+        show(activity,frames,reference,"功率",List.of(new Option("曲线图",WidgetSettings.POWER_CHART),new Option("BMS 优先",WidgetSettings.POWER_FROM_BMS)),
                 List.of(new Slider("曲线时长",WidgetSettings.MIN_CHART_SECONDS,WidgetSettings.MAX_CHART_SECONDS,s.powerChartSeconds(),SECONDS)),
                 (current,mask,values)->current.withMask(mask).powerChart(values[0]));
     }
